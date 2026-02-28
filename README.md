@@ -47,6 +47,14 @@ This loads the historical resource data (10,000 rows) and field intelligence rep
 | API Docs | http://localhost:8000/docs | Interactive Swagger/OpenAPI documentation |
 | API Health | http://localhost:8000/health | Backend health check endpoint |
 
+### Production (DigitalOcean Droplet)
+
+| Service | URL |
+|---------|-----|
+| Dashboard | http://209.97.154.53:3000 |
+| API Docs (Swagger) | http://209.97.154.53:8000/docs |
+| API Health | http://209.97.154.53:8000/health |
+
 ## Running Tests
 
 ### Backend tests
@@ -61,26 +69,59 @@ docker-compose exec backend pytest
 docker-compose exec frontend npm test
 ```
 
-## DigitalOcean Deployment
+## DigitalOcean Droplet Deployment
 
-### Via CLI
+### 1. Create a Droplet
+
+- **Image**: Ubuntu 22.04 + Docker (from the DO Marketplace — Docker comes pre-installed)
+- **Size**: Basic, 2GB RAM / 1 CPU ($12-24/mo)
+- **Authentication**: SSH key (recommended)
+
+### 2. Configure the firewall
+
+In DO Console → Networking → Firewalls, open inbound ports:
+- `22` — SSH
+- `3000` — Frontend
+- `8000` — Backend API (for curl/Postman access, required for demo)
+
+Do **not** expose port 5432 publicly — PostgreSQL stays internal to Docker.
+
+### 3. Deploy
 
 ```bash
-doctl apps create --spec .do/app.yaml
+# SSH into your Droplet
+ssh root@YOUR_DROPLET_IP
+
+# Clone the repo
+git clone https://github.com/YOUR_USERNAME/YOUR_REPO.git
+cd YOUR_REPO
+
+# Configure environment
+cp .env.example .env
+nano .env   # Set OPENAI_API_KEY, POSTGRES_PASSWORD, and:
+            # NEXT_PUBLIC_API_URL=http://YOUR_DROPLET_IP:8000
+
+# Start all services
+docker compose up -d --build
+
+# Seed the database
+docker compose exec backend python scripts/seed_db.py
 ```
 
-### Via Web Console
+### 4. Access
 
-1. Go to [DigitalOcean App Platform](https://cloud.digitalocean.com/apps)
-2. Create a new app from your GitHub repository
-3. Import the app spec from `.do/app.yaml`
-4. Set the `OPENAI_API_KEY` secret in the app settings
-5. Deploy
+| Service | URL |
+|---------|-----|
+| Dashboard | `http://YOUR_DROPLET_IP:3000` |
+| API Docs (Swagger) | `http://YOUR_DROPLET_IP:8000/docs` |
+| Health Check | `http://YOUR_DROPLET_IP:8000/health` |
 
-The app spec configures:
-- Backend service with health checks
-- Frontend service with build-time API URL injection
-- Managed PostgreSQL database (dev tier)
+### Updating after a code push
+
+```bash
+git pull
+docker compose up -d --build
+```
 
 ## Environment Variables
 
@@ -99,9 +140,8 @@ The app spec configures:
 
 ```
 CGI-Innovate/
-├── docker-compose.yml          # Local development orchestration
+├── docker-compose.yml          # Orchestrates all services (local + Droplet)
 ├── .env.example                # Environment variable template
-├── .do/app.yaml                # DigitalOcean App Platform spec
 ├── src/
 │   ├── frontend/               # Next.js 15 + shadcn/ui + Recharts
 │   │   ├── Dockerfile
