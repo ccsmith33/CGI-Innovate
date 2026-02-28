@@ -1,0 +1,6 @@
+project:
+  name: CGI
+  type: web-app
+phase: not-started
+status: initialized
+created: '2026-02-28'

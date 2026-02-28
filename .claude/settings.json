@@ -1,0 +1,79 @@
+{
+  "_bmadGenerated": "26caefda",
+  "permissions": {
+    "allow": [
+      "Bash(*)",
+      "Edit",
+      "Write",
+      "Read",
+      "MultiEdit",
+      "Task",
+      "WebSearch",
+      "WebFetch",
+      "TodoRead",
+      "TodoWrite"
+    ]
+  },
+  "hooks": {
+    "UserPromptSubmit": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node .claude/hooks/user-prompt-submit.cjs"
+          }
+        ]
+      }
+    ],
+    "PostToolUse": [
+      {
+        "matcher": "Task",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node .claude/hooks/task-tool-warning.cjs"
+          }
+        ]
+      }
+    ],
+    "SessionStart": [
+      {
+        "matcher": "compact",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node .claude/hooks/identity-reinject.cjs"
+          }
+        ]
+      },
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node .claude/hooks/identity-reinject.cjs"
+          }
+        ]
+      }
+    ],
+    "TaskCompleted": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node .claude/hooks/TaskCompleted.cjs"
+          }
+        ]
+      }
+    ],
+    "TeammateIdle": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node .claude/hooks/TeammateIdle.cjs"
+          }
+        ]
+      }
+    ]
+  }
+}
