@@ -1,7 +1,9 @@
-project-sentinel.live {
+:80 {
+    handle /api/* {
+        reverse_proxy backend:8000
+    }
+    handle /health {
+        reverse_proxy backend:8000
+    }
     reverse_proxy frontend:3000
-}
-
-api.project-sentinel.live {
-    reverse_proxy backend:8000
 }

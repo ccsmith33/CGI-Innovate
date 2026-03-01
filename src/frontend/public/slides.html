@@ -1,0 +1,278 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Project Sentinel — Technical Overview</title>
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/reveal.js@5.1.0/dist/reveal.css">
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/reveal.js@5.1.0/dist/theme/black.css">
+  <style>
+    :root {
+      --s-blue: #60a5fa;
+      --s-cyan: #22d3ee;
+      --s-purple: #a78bfa;
+      --s-green: #34d399;
+      --s-red: #f87171;
+      --s-yellow: #fbbf24;
+    }
+
+    .reveal { font-family: 'Segoe UI', system-ui, -apple-system, sans-serif; }
+    .reveal h1 { color: var(--s-blue); font-weight: 700; text-transform: uppercase; letter-spacing: 0.05em; }
+    .reveal h2 { color: var(--s-cyan); font-weight: 600; font-size: 1.6em; }
+
+    .subtitle {
+      color: rgba(255,255,255,0.5);
+      font-size: 0.5em;
+      letter-spacing: 0.2em;
+      text-transform: uppercase;
+    }
+
+    .score-badge {
+      display: inline-block;
+      background: rgba(96,165,250,0.15);
+      border: 1px solid var(--s-blue);
+      border-radius: 8px;
+      padding: 4px 16px;
+      font-size: 0.7em;
+      font-weight: 700;
+      color: var(--s-blue);
+      margin-bottom: 0.3em;
+    }
+
+    /* Rubric cards */
+    .rubric-grid {
+      display: flex;
+      gap: 16px;
+      justify-content: center;
+      margin-top: 30px;
+      flex-wrap: wrap;
+    }
+    .rubric-card {
+      border-radius: 12px;
+      padding: 20px 30px;
+      text-align: center;
+      min-width: 140px;
+    }
+    .rubric-card .pct { font-size: 2em; font-weight: 800; }
+    .rubric-card .lbl { font-size: 0.6em; color: rgba(255,255,255,0.7); }
+
+    /* Pillar grid */
+    .pillar-grid {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 16px;
+      margin-top: 16px;
+    }
+    .pillar-card {
+      background: rgba(255,255,255,0.05);
+      border: 1px solid rgba(255,255,255,0.1);
+      border-radius: 12px;
+      padding: 16px;
+      text-align: left;
+    }
+    .pillar-card h3 { margin: 0 0 6px 0; font-size: 0.85em; }
+    .pillar-card p { margin: 0; font-size: 0.5em; color: rgba(255,255,255,0.7); line-height: 1.5; }
+
+    /* Tech tags */
+    .tech-stack { display: flex; gap: 10px; justify-content: center; flex-wrap: wrap; margin-top: 16px; }
+    .tech-tag {
+      background: rgba(34,211,238,0.1);
+      border: 1px solid rgba(34,211,238,0.3);
+      border-radius: 20px;
+      padding: 4px 14px;
+      font-size: 0.45em;
+      color: var(--s-cyan);
+    }
+
+    /* Feature list */
+    .feature-list { text-align: left; list-style: none; padding: 0; margin: 0; }
+    .feature-list li {
+      padding: 7px 0;
+      font-size: 0.6em;
+      border-bottom: 1px solid rgba(255,255,255,0.05);
+      display: flex;
+      align-items: baseline;
+      gap: 10px;
+    }
+    .feature-list li::before { content: '\25B8'; color: var(--s-cyan); font-size: 1em; }
+    .hl { color: var(--s-cyan); font-weight: 600; }
+
+    /* Pipeline */
+    .pipeline { display: flex; align-items: center; justify-content: center; gap: 6px; margin: 16px 0; font-size: 0.5em; }
+    .pipe-step {
+      background: rgba(167,139,250,0.1);
+      border: 1px solid rgba(167,139,250,0.3);
+      border-radius: 8px;
+      padding: 8px 12px;
+      color: var(--s-purple);
+    }
+    .pipe-arrow { color: rgba(255,255,255,0.3); }
+
+    /* Arch diagram */
+    .arch-diagram {
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      gap: 6px;
+      margin-top: 18px;
+      font-size: 0.45em;
+    }
+    .arch-row { display: flex; gap: 10px; align-items: center; }
+    .arch-box {
+      border-radius: 8px;
+      padding: 8px 18px;
+      font-weight: 600;
+      text-align: center;
+    }
+    .arch-arrow { color: rgba(255,255,255,0.25); font-size: 1.4em; }
+  </style>
+</head>
+<body>
+  <div class="reveal">
+    <div class="slides">
+
+      <!-- 1: Title -->
+      <section data-background-gradient="linear-gradient(135deg, #0f172a 0%, #1e1b4b 50%, #0f172a 100%)">
+        <h1 style="font-size: 3em; margin-bottom: 0;">SENTINEL</h1>
+        <p class="subtitle">Command &amp; Control Dashboard</p>
+        <p style="font-size: 0.55em; color: rgba(255,255,255,0.35); margin-top: 40px;">
+          UA Innovate 2026 &middot; CGI FullStack Challenge
+        </p>
+      </section>
+
+      <!-- 2: Architecture -->
+      <section>
+        <span class="score-badge">Architecture</span>
+        <h2>Four-Pillar Design</h2>
+        <div class="pillar-grid">
+          <div class="pillar-card">
+            <h3 style="color: var(--s-blue);">The Vault</h3>
+            <p>PostgreSQL 16 + FastAPI + SQLAlchemy<br>REST API, auto-generated OpenAPI docs, Alembic migrations, ACID transactions</p>
+          </div>
+          <div class="pillar-card">
+            <h3 style="color: var(--s-cyan);">The HUD</h3>
+            <p>Next.js 16 + shadcn/ui + Recharts<br>Real-time SSE streaming, SWR polling, responsive dark-mode dashboard</p>
+          </div>
+          <div class="pillar-card">
+            <h3 style="color: var(--s-purple);">Jarvis</h3>
+            <p>GPT + scikit-learn + Strategy Pattern<br>LLM entity extraction, snap-aware ML forecasting, autonomous governor</p>
+          </div>
+          <div class="pillar-card">
+            <h3 style="color: var(--s-green);">The Shield</h3>
+            <p>Server-side PII redaction pipeline<br>Regex patterns, audit logging, zero-trust guarantee before any LLM call</p>
+          </div>
+        </div>
+        <div class="tech-stack">
+          <span class="tech-tag">Docker</span>
+          <span class="tech-tag">DigitalOcean</span>
+          <span class="tech-tag">SSE Events</span>
+          <span class="tech-tag">Microservices</span>
+          <span class="tech-tag">Strategy Pattern</span>
+        </div>
+      </section>
+
+      <!-- 3b: Architecture Diagram -->
+      <section>
+        <span class="score-badge">Architecture</span>
+        <h2>System Flow</h2>
+        <div class="arch-diagram">
+          <div class="arch-row">
+            <div class="arch-box" style="background: rgba(96,165,250,0.15); border: 1px solid var(--s-blue); color: var(--s-blue);">Browser (HUD)</div>
+          </div>
+          <div class="arch-arrow">&darr; SSE + REST &darr;</div>
+          <div class="arch-row">
+            <div class="arch-box" style="background: rgba(167,139,250,0.15); border: 1px solid var(--s-purple); color: var(--s-purple);">FastAPI Backend</div>
+          </div>
+          <div class="arch-row" style="gap: 30px;">
+            <div style="text-align: center;">
+              <div class="arch-arrow">&darr;</div>
+              <div class="arch-box" style="background: rgba(34,211,238,0.15); border: 1px solid var(--s-cyan); color: var(--s-cyan);">PostgreSQL</div>
+            </div>
+            <div style="text-align: center;">
+              <div class="arch-arrow">&darr;</div>
+              <div class="arch-box" style="background: rgba(52,211,153,0.15); border: 1px solid var(--s-green); color: var(--s-green);">Shield (PII)</div>
+            </div>
+            <div style="text-align: center;">
+              <div class="arch-arrow">&darr;</div>
+              <div class="arch-box" style="background: rgba(251,191,36,0.15); border: 1px solid var(--s-yellow); color: var(--s-yellow);">Jarvis (AI/ML)</div>
+            </div>
+          </div>
+          <div class="arch-arrow">&uarr; events &uarr;</div>
+          <div class="arch-row">
+            <div class="arch-box" style="background: rgba(248,113,113,0.15); border: 1px solid var(--s-red); color: var(--s-red);">Feed Service (Simulation)</div>
+          </div>
+        </div>
+      </section>
+
+      <!-- 4: Intelligent Processing (20%) -->
+      <section>
+        <span class="score-badge" style="border-color: var(--s-purple); color: var(--s-purple); background: rgba(167,139,250,0.15);">Intelligent Processing</span>
+        <h2>JARVIS AI Suite</h2>
+        <ul class="feature-list">
+          <li><span class="hl">LLM Entity Extraction</span> &mdash; Field reports &rarr; structured JSON (sector, resource, severity)</li>
+          <li><span class="hl">Snap-Aware Forecasting</span> &mdash; ML regression that detects anomalies, discards pre-snap data</li>
+          <li><span class="hl">Autonomous Governor</span> &mdash; Champion/Challenger model allocating production budgets in real-time</li>
+          <li><span class="hl">Voice Interface</span> &mdash; Web Speech API input + ElevenLabs TTS output</li>
+          <li><span class="hl">VLM Photo Intel</span> &mdash; Vision model analyzes field images into structured reports</li>
+        </ul>
+        <div class="pipeline">
+          <span class="pipe-step">Raw Report</span>
+          <span class="pipe-arrow">&rarr;</span>
+          <span class="pipe-step">PII Redaction</span>
+          <span class="pipe-arrow">&rarr;</span>
+          <span class="pipe-step">LLM Extract</span>
+          <span class="pipe-arrow">&rarr;</span>
+          <span class="pipe-step">Structured Intel</span>
+        </div>
+      </section>
+
+      <!-- 5: Security (20%) -->
+      <section>
+        <span class="score-badge" style="border-color: var(--s-green); color: var(--s-green); background: rgba(52,211,153,0.15);">Security</span>
+        <h2>The Shield &mdash; Privacy by Design</h2>
+        <ul class="feature-list">
+          <li><span class="hl">Zero-Trust PII</span> &mdash; Server-side regex redaction BEFORE any external API call</li>
+          <li><span class="hl">Defense in Depth</span> &mdash; Hero alias + phone patterns + known-name roster matching</li>
+          <li><span class="hl">Crypto Audit Trail</span> &mdash; SHA-256 hash + matched patterns logged for every redaction</li>
+          <li><span class="hl">API Hardening</span> &mdash; CORS policy, Pydantic validation, raw_text never in responses</li>
+          <li><span class="hl">Secrets Management</span> &mdash; Env vars locally, encrypted secrets in DigitalOcean production</li>
+        </ul>
+      </section>
+
+      <!-- 6: UI & Professionalism (20%) -->
+      <section>
+        <span class="score-badge" style="border-color: var(--s-yellow); color: var(--s-yellow); background: rgba(251,191,36,0.15);">UI &amp; Professionalism</span>
+        <h2>Military HUD Experience</h2>
+        <ul class="feature-list">
+          <li><span class="hl">3D Tactical Globe</span> &mdash; WebGL globe with animated supply arcs and sector markers</li>
+          <li><span class="hl">HUD Overlay</span> &mdash; Corner brackets, scanline sweep, dot grid, trace borders (pure CSS)</li>
+          <li><span class="hl">DEFCON System</span> &mdash; 5-level threat escalation with real-time visual state changes</li>
+          <li><span class="hl">Snap Sequence</span> &mdash; GSAP-choreographed cinematic event with CRT + blast effects</li>
+          <li><span class="hl">Real-Time Charts</span> &mdash; Recharts with forecast overlays and time-to-zero annotations</li>
+          <li><span class="hl">JARVIS Chat + Voice</span> &mdash; AI assistant with speech recognition and TTS</li>
+        </ul>
+      </section>
+
+      <!-- 7: Closing -->
+      <section data-background-gradient="linear-gradient(135deg, #0f172a 0%, #1e1b4b 50%, #0f172a 100%)">
+        <h1 style="font-size: 2.2em;">THANK YOU</h1>
+        <p class="subtitle">Project Sentinel</p>
+      </section>
+
+    </div>
+  </div>
+
+  <script src="https://cdn.jsdelivr.net/npm/reveal.js@5.1.0/dist/reveal.js"></script>
+  <script>
+    Reveal.initialize({
+      hash: true,
+      transition: 'slide',
+      backgroundTransition: 'fade',
+      center: true,
+      controls: true,
+      progress: true,
+      slideNumber: 'c/t',
+    });
+  </script>
+</body>
+</html>
