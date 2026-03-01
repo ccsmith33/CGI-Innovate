@@ -1,0 +1,7 @@
+project-sentinel.xyz {
+    reverse_proxy frontend:3000
+}
+
+api.project-sentinel.xyz {
+    reverse_proxy backend:8000
+}

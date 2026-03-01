@@ -1,4 +1,18 @@
 services:
+  caddy:
+    image: caddy:2
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile
+      - caddy_data:/data
+    depends_on:
+      - frontend
+      - backend
+    networks:
+      - sentinel-net
+
   frontend:
     build:
       context: ./src/frontend
@@ -7,8 +21,8 @@ services:
         NEXT_PUBLIC_API_URL: ${NEXT_PUBLIC_API_URL:-http://localhost:8000}
         NEXT_PUBLIC_ELEVENLABS_API_KEY: ${NEXT_PUBLIC_ELEVENLABS_API_KEY}
         NEXT_PUBLIC_ELEVENLABS_VOICE_ID: ${NEXT_PUBLIC_ELEVENLABS_VOICE_ID:-nPczCjzI2devNBz1zQrb}
-    ports:
-      - "3000:3000"
+    expose:
+      - "3000"
     depends_on:
       - backend
     networks:
@@ -34,8 +48,8 @@ services:
     build:
       context: ./src/backend
       dockerfile: Dockerfile
-    ports:
-      - "8000:8000"
+    expose:
+      - "8000"
     env_file:
       - .env
     environment:
@@ -77,6 +91,7 @@ services:
 
 volumes:
   pgdata:
+  caddy_data:
 
 networks:
   sentinel-net:
