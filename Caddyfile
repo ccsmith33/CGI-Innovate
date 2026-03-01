@@ -1,7 +1,7 @@
-project-sentinel.xyz {
+project-sentinel.live {
     reverse_proxy frontend:3000
 }
 
-api.project-sentinel.xyz {
+api.project-sentinel.live {
     reverse_proxy backend:8000
 }
