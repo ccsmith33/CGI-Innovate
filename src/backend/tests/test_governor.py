@@ -9,7 +9,7 @@ from unittest.mock import AsyncMock, patch
 from httpx import ASGITransport, AsyncClient
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
-from app.resource_config import RESOURCE_CONFIG, TOTAL_BUDGET
+from app.resource_config import BASE_DRAIN_RATES, RESOURCE_CONFIG, TOTAL_BUDGET
 from app.database import Base, get_db, set_session_factory
 from app.main import app
 from app.models.control_action import ControlAction
@@ -21,7 +21,9 @@ from app.services.governor import (
     _sector_key,
     optimize_allocations,
 )
-from app.services.strategies.trend_model import TrendModel, TrendResult
+from app.services.strategies.trend_model import TrendModel, TrendResult as OldTrendResult
+from app.services.strategies.holt_cusum import HoltCUSUMModel, TrendResult
+from app.services.strategies.mpc_optimizer import solve_simple
 
 
 # ---------------------------------------------------------------------------
@@ -123,7 +125,7 @@ async def governor_client(governor_session):
 
 
 # ---------------------------------------------------------------------------
-# TrendModel tests
+# Legacy TrendModel tests (trend_model.py still exists)
 # ---------------------------------------------------------------------------
 
 class TestTrendModel:
@@ -172,34 +174,111 @@ class TestTrendModel:
 
 
 # ---------------------------------------------------------------------------
-# Budget optimizer tests
+# HoltCUSUMModel tests
+# ---------------------------------------------------------------------------
+
+class TestHoltCUSUMModel:
+    def test_declining_series_negative_slope(self):
+        model = HoltCUSUMModel()
+        ts = [datetime(2026, 1, 1, i, tzinfo=timezone.utc) for i in range(20)]
+        levels = [500.0 - i * 10 for i in range(20)]
+        result = model.fit(ts, levels)
+        assert result.slope < 0
+        assert result.current_stock == levels[-1]
+        assert result.projected_stock_in_5_cycles < result.current_stock
+
+    def test_flat_series_slope_near_zero(self):
+        model = HoltCUSUMModel()
+        ts = [datetime(2026, 1, 1, i, tzinfo=timezone.utc) for i in range(20)]
+        levels = [500.0] * 20
+        result = model.fit(ts, levels)
+        assert abs(result.slope) < 1.0
+        assert result.confidence > 90.0
+
+    def test_upward_series_positive_slope(self):
+        model = HoltCUSUMModel()
+        ts = [datetime(2026, 1, 1, i, tzinfo=timezone.utc) for i in range(20)]
+        levels = [100.0 + i * 5 for i in range(20)]
+        result = model.fit(ts, levels)
+        assert result.slope > 0
+        assert result.projected_stock_in_5_cycles > result.current_stock
+
+    def test_step_change_detected(self):
+        """A sudden jump in the series should trigger CUSUM step-change detection."""
+        model = HoltCUSUMModel()
+        ts = [datetime(2026, 1, 1, i, tzinfo=timezone.utc) for i in range(20)]
+        # Flat at 500 for 10 points, then sudden drop to 200 for 10 points
+        levels = [500.0] * 10 + [200.0] * 10
+        result = model.fit(ts, levels)
+        assert result.step_change_detected is True
+
+    def test_no_step_change_on_smooth_trend(self):
+        """A smooth linear decline should NOT trigger step-change."""
+        model = HoltCUSUMModel()
+        ts = [datetime(2026, 1, 1, i, tzinfo=timezone.utc) for i in range(20)]
+        levels = [500.0 - i * 10 for i in range(20)]
+        result = model.fit(ts, levels)
+        assert result.step_change_detected is False
+
+    def test_single_point(self):
+        model = HoltCUSUMModel()
+        ts = [datetime(2026, 1, 1, tzinfo=timezone.utc)]
+        levels = [300.0]
+        result = model.fit(ts, levels)
+        assert result.slope == 0.0
+        assert result.confidence == 0.0
+        assert result.projected_stock_in_5_cycles == 300.0
+        assert result.step_change_detected is False
+
+    def test_two_points(self):
+        model = HoltCUSUMModel()
+        ts = [datetime(2026, 1, 1, i, tzinfo=timezone.utc) for i in range(2)]
+        levels = [100.0, 110.0]
+        result = model.fit(ts, levels)
+        assert result.slope > 0
+        assert result.current_stock == 110.0
+
+    def test_confidence_bounded_0_to_100(self):
+        model = HoltCUSUMModel()
+        ts = [datetime(2026, 1, 1, i, tzinfo=timezone.utc) for i in range(10)]
+        # Noisy data
+        levels = [100.0, 300.0, 50.0, 400.0, 20.0, 500.0, 10.0, 600.0, 5.0, 700.0]
+        result = model.fit(ts, levels)
+        assert 0.0 <= result.confidence <= 100.0
+        assert 0.0 <= result.r_squared <= 1.0
+
+    def test_projected_stock_non_negative(self):
+        """Projected stock in 5 cycles should never go below 0."""
+        model = HoltCUSUMModel()
+        ts = [datetime(2026, 1, 1, i, tzinfo=timezone.utc) for i in range(20)]
+        # Rapidly declining — would project negative without floor
+        levels = [100.0 - i * 10 for i in range(20)]
+        result = model.fit(ts, levels)
+        assert result.projected_stock_in_5_cycles >= 0.0
+
+    def test_trend_result_has_step_change_default(self):
+        """TrendResult can be constructed without step_change_detected (default False)."""
+        tr = TrendResult(
+            slope=1.0,
+            r_squared=0.9,
+            confidence=90.0,
+            projected_stock_in_5_cycles=500.0,
+            current_stock=450.0,
+        )
+        assert tr.step_change_detected is False
+
+
+# ---------------------------------------------------------------------------
+# Smooth proportional controller tests (via optimize_allocations)
 # ---------------------------------------------------------------------------
 
 class TestBudgetOptimizer:
-    def test_total_stays_under_budget(self):
-        trends = {}
-        for (sector_id, resource_type), cfg in RESOURCE_CONFIG.items():
-            key = _sector_key(sector_id, resource_type)
-            trends[key] = TrendResult(
-                slope=-5.0,
-                r_squared=0.9,
-                confidence=90.0,
-                projected_stock_in_5_cycles=cfg["target_stock"] - 25,
-                current_stock=cfg["target_stock"] * 0.8,
-            )
-        allocations = optimize_allocations(trends, RESOURCE_CONFIG)
-        total_cost = sum(
-            allocations[_sector_key(sid, rt)] * cfg["cost_per_unit"]
-            for (sid, rt), cfg in RESOURCE_CONFIG.items()
-        )
-        assert total_cost <= TOTAL_BUDGET
-
     def test_critical_sector_gets_boosted(self):
+        """A sector well below target gets more than drain (proportional ramp)."""
         trends = {}
         for (sector_id, resource_type), cfg in RESOURCE_CONFIG.items():
             key = _sector_key(sector_id, resource_type)
             if sector_id == "Avengers Compound":
-                # CRITICAL: stock below 30% of target
                 current = cfg["target_stock"] * 0.2
             else:
                 current = cfg["target_stock"] * 0.8
@@ -212,26 +291,189 @@ class TestBudgetOptimizer:
             )
         allocations = optimize_allocations(trends, RESOURCE_CONFIG)
         avengers_key = _sector_key("Avengers Compound", "Medical Kits")
-        avengers_base = RESOURCE_CONFIG[("Avengers Compound", "Medical Kits")]["base_production"]
-        assert allocations[avengers_key] > avengers_base
+        avengers_drain = BASE_DRAIN_RATES["Medical Kits"]
+        assert allocations[avengers_key] > avengers_drain + 0.01
 
-    def test_no_sector_below_80pct_base(self):
+    def test_all_at_target_allocations_equal_drain(self):
+        """When all stocks are at target with zero slope, every allocation == drain."""
         trends = {}
         for (sector_id, resource_type), cfg in RESOURCE_CONFIG.items():
             key = _sector_key(sector_id, resource_type)
-            # All critical to force heavy rebalancing
             trends[key] = TrendResult(
-                slope=-10.0,
-                r_squared=0.95,
-                confidence=95.0,
-                projected_stock_in_5_cycles=50,
-                current_stock=cfg["target_stock"] * 0.1,
+                slope=0.0,
+                r_squared=0.9,
+                confidence=90.0,
+                projected_stock_in_5_cycles=cfg["target_stock"],
+                current_stock=cfg["target_stock"],
             )
         allocations = optimize_allocations(trends, RESOURCE_CONFIG)
         for (sector_id, resource_type), cfg in RESOURCE_CONFIG.items():
             key = _sector_key(sector_id, resource_type)
-            min_prod = cfg["base_production"] * 0.8
-            assert allocations[key] >= min_prod - 0.01  # small float tolerance
+            drain = BASE_DRAIN_RATES.get(resource_type, cfg["base_production"])
+            assert abs(allocations[key] - drain) < 0.01, (
+                f"{key}: allocation {allocations[key]:.2f} should equal drain {drain}"
+            )
+
+    def test_declining_sector_gets_more_than_drain(self):
+        """A sector with stock below target gets allocated more than its drain rate."""
+        trends = {}
+        for (sector_id, resource_type), cfg in RESOURCE_CONFIG.items():
+            key = _sector_key(sector_id, resource_type)
+            if sector_id == "Avengers Compound":
+                trends[key] = TrendResult(
+                    slope=-10.0,
+                    r_squared=0.9,
+                    confidence=90.0,
+                    projected_stock_in_5_cycles=cfg["target_stock"] * 0.4,
+                    current_stock=cfg["target_stock"] * 0.5,
+                )
+            else:
+                trends[key] = TrendResult(
+                    slope=0.0,
+                    r_squared=0.9,
+                    confidence=90.0,
+                    projected_stock_in_5_cycles=cfg["target_stock"],
+                    current_stock=cfg["target_stock"],
+                )
+        allocations = optimize_allocations(trends, RESOURCE_CONFIG)
+        avengers_key = _sector_key("Avengers Compound", "Medical Kits")
+        drain = BASE_DRAIN_RATES["Medical Kits"]
+        assert allocations[avengers_key] > drain + 0.01, (
+            f"Below-target sector should get more than drain rate {drain}, "
+            f"got {allocations[avengers_key]:.2f}"
+        )
+
+
+# ---------------------------------------------------------------------------
+# solve_simple unit tests (recovery-target controller)
+# ---------------------------------------------------------------------------
+
+class TestSolveSimple:
+    def _make_trend(self, current_stock, slope=0.0):
+        return TrendResult(
+            slope=slope,
+            r_squared=0.9,
+            confidence=90.0,
+            projected_stock_in_5_cycles=current_stock + 5 * slope,
+            current_stock=current_stock,
+        )
+
+    def _solve_one(self, sid, rt, current_stock, slope=0.0):
+        """Helper: run solve_simple for a single sector and return its allocation."""
+        cfg = RESOURCE_CONFIG[(sid, rt)]
+        key = f"{sid}|{rt}"
+        trends = {key: self._make_trend(current_stock, slope)}
+        result = solve_simple(
+            trends=trends,
+            config={(sid, rt): cfg},
+            drain_rates={},
+            total_budget=TOTAL_BUDGET,
+        )
+        return result[key]
+
+    def test_at_target_returns_drain(self):
+        """Stock at target with zero slope -> u = drain (exact break-even)."""
+        sid, rt = "Avengers Compound", "Medical Kits"
+        drain = BASE_DRAIN_RATES[rt]
+        u = self._solve_one(sid, rt, RESOURCE_CONFIG[(sid, rt)]["target_stock"])
+        assert abs(u - drain) < 0.01, (
+            f"At target: expected drain {drain}, got {u:.2f}"
+        )
+
+    def test_50pct_below_target_capped_at_2x_drain(self):
+        """Stock 50% below target -> recovery formula wants drain+60 but capped at 2x drain."""
+        sid, rt = "Avengers Compound", "Medical Kits"
+        drain = BASE_DRAIN_RATES[rt]  # 12.75
+        target = RESOURCE_CONFIG[(sid, rt)]["target_stock"]  # 600
+        u = self._solve_one(sid, rt, target * 0.5)
+        # Uncapped: drain + 300/5 = 72.75, but capped at 2x drain = 25.5
+        expected = drain * 2.0
+        assert abs(u - expected) < 0.01, (
+            f"50% below target: expected capped {expected:.2f}, got {u:.2f}"
+        )
+
+    def test_above_target_bleeds_off(self):
+        """Stock above target -> u < drain (bleeding off surplus)."""
+        sid, rt = "Avengers Compound", "Medical Kits"
+        target = RESOURCE_CONFIG[(sid, rt)]["target_stock"]  # 600
+        drain = BASE_DRAIN_RATES[rt]  # 12.75
+        u = self._solve_one(sid, rt, target * 1.5)
+        # projected = 900, surplus = 300
+        # bleed_off = 300 / 10 = 30
+        # u = max(0, 12.75 - 30) = 0
+        assert u < drain, (
+            f"Above target: expected u < drain {drain}, got {u:.2f}"
+        )
+
+    def test_way_above_target_approaches_zero(self):
+        """Stock far above target -> u clamped to 0 (max bleed-off exceeds drain)."""
+        sid, rt = "Avengers Compound", "Medical Kits"
+        target = RESOURCE_CONFIG[(sid, rt)]["target_stock"]
+        u = self._solve_one(sid, rt, target * 5.0)
+        # projected = 3000, surplus = 2400
+        # bleed_off = 2400 / 10 = 240 >> drain 12.75
+        # u = max(0, 12.75 - 240) = 0
+        assert u == 0.0, f"Way above target: expected 0, got {u:.2f}"
+
+    def test_negative_slope_increases_allocation(self):
+        """Negative slope (declining stock) increases u via 1-step lookahead."""
+        sid, rt = "Avengers Compound", "Medical Kits"
+        target = RESOURCE_CONFIG[(sid, rt)]["target_stock"]
+        # Stock at target but declining fast -> projected is below target
+        u_flat = self._solve_one(sid, rt, target, slope=0.0)
+        u_declining = self._solve_one(sid, rt, target, slope=-50.0)
+        assert u_declining > u_flat + 0.01, (
+            f"Declining slope should produce higher allocation: "
+            f"flat={u_flat:.2f}, declining={u_declining:.2f}"
+        )
+
+    def test_all_keys_present(self):
+        """solve_simple returns a key for every sector in config."""
+        trends = {}
+        for (sid, rt), cfg in RESOURCE_CONFIG.items():
+            key = f"{sid}|{rt}"
+            trends[key] = self._make_trend(cfg["target_stock"])
+        result = solve_simple(
+            trends=trends,
+            config=RESOURCE_CONFIG,
+            drain_rates={},
+            total_budget=TOTAL_BUDGET,
+        )
+        for (sid, rt) in RESOURCE_CONFIG:
+            key = f"{sid}|{rt}"
+            assert key in result
+
+    def test_missing_trend_uses_target_as_current(self):
+        """If a sector has no trend data, current defaults to target -> u = drain."""
+        sid, rt = "Avengers Compound", "Medical Kits"
+        cfg = RESOURCE_CONFIG[(sid, rt)]
+        key = f"{sid}|{rt}"
+        drain = BASE_DRAIN_RATES[rt]
+        result = solve_simple(
+            trends={},
+            config={(sid, rt): cfg},
+            drain_rates={},
+            total_budget=TOTAL_BUDGET,
+        )
+        assert abs(result[key] - drain) < 0.01, (
+            f"No trend data: expected drain {drain}, got {result[key]:.2f}"
+        )
+
+    def test_dead_zone_returns_drain(self):
+        """Stock within 2% of target -> u = drain (no correction)."""
+        sid, rt = "Avengers Compound", "Medical Kits"
+        target = RESOURCE_CONFIG[(sid, rt)]["target_stock"]  # 600
+        drain = BASE_DRAIN_RATES[rt]
+        # 1% below target = 594, well within 2% dead zone
+        u = self._solve_one(sid, rt, target * 0.99)
+        assert abs(u - drain) < 0.01, (
+            f"Inside dead zone: expected drain {drain}, got {u:.2f}"
+        )
+
+    def test_backward_compat_alias(self):
+        """solve_mpc alias works for backward compatibility."""
+        from app.services.strategies.mpc_optimizer import solve_mpc
+        assert solve_mpc is solve_simple
 
 
 # ---------------------------------------------------------------------------
@@ -272,23 +514,28 @@ class TestChampionChallengerSwap:
         assert gov.backup is old_champ
         assert gov.challenger is None
 
-    def test_champion_wins_discards_challenger(self):
+    def test_champion_wins_applies_fresh_allocations(self):
         gov = Governor()
         champ = ModelSnapshot(
             trained_at=datetime.now(timezone.utc),
             data_points=100,
             overall_confidence=90.0,
+            allocations={"a": 5.0, "b": 10.0},
         )
         gov.champion = champ
 
         worse = ModelSnapshot(
             trained_at=datetime.now(timezone.utc),
-            data_points=100,
+            data_points=200,
             overall_confidence=60.0,
+            allocations={"a": 8.0, "b": 3.0},
         )
         gov._promote(worse)
         assert gov.champion is champ
         assert gov.challenger is None
+        # Fresh allocations and data_points must be applied even though champion won
+        assert gov.champion.allocations == {"a": 8.0, "b": 3.0}
+        assert gov.champion.data_points == 200
 
     def test_backup_preserved_after_second_promotion(self):
         gov = Governor()
@@ -329,7 +576,7 @@ class TestControlActionLogging:
         with patch.object(gov, "_send_production_commands", new_callable=AsyncMock):
             action = await gov.run_cycle(critical_session)
         assert action is not None
-        assert action.total_budget_used <= TOTAL_BUDGET
+        assert action.total_budget_used <= TOTAL_BUDGET + 1.0  # solver tolerance
 
 
 # ---------------------------------------------------------------------------

@@ -78,6 +78,8 @@ export interface GovernorAllocation {
   resource_type: string
   units_per_cycle: number
   cost_per_cycle: number
+  /** Governor-derived status: CUTTING | MAINTAINING | RAMPING */
+  status: 'CUTTING' | 'MAINTAINING' | 'RAMPING'
 }
 
 export interface GovernorStatus {
@@ -109,6 +111,7 @@ export interface TimeToZeroRaw {
 export type NetStatus =
   | 'STABLE'
   | 'RECOVERING'
+  | 'OPTIMAL'
   | 'LOW'
   | 'CRITICAL'
   | 'DEPLETING'
@@ -125,6 +128,8 @@ export interface TimeToZeroEntry {
   production_rate_hourly?: number
   /** Target stock from resource config. Populated by enrichment on the frontend. */
   target_stock?: number
+  /** Governor-derived status for this allocation. Populated by enrichment on the frontend. */
+  governor_status?: 'CUTTING' | 'MAINTAINING' | 'RAMPING'
 }
 
 export interface ChatMessage {

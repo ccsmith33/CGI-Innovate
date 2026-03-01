@@ -14,11 +14,13 @@ from app.config import settings
 from app.resource_config import RESOURCE_CONFIG, TOTAL_BUDGET
 from app.models.control_action import ControlAction
 from app.models.resource_log import ResourceLog
-from app.services.strategies.trend_model import TrendModel, TrendResult
+from app.services.strategies.holt_cusum import HoltCUSUMModel, TrendResult
+from app.services.strategies.mpc_optimizer import solve_simple
 
 logger = logging.getLogger(__name__)
 
 DATA_POINTS = 20  # last N entries per sector for training
+PLAN_HOLD_CYCLES = 3  # commit to a plan for 3 cycles before reassessing
 
 
 @dataclass
@@ -38,80 +40,13 @@ def optimize_allocations(
     trends: dict[str, TrendResult],
     config: dict[tuple[str, str], dict],
 ) -> dict[str, float]:
-    """Return production units per sector that stay within TOTAL_BUDGET.
-
-    Algorithm:
-    1. Start with base_production for all sectors (= ~$95K baseline)
-    2. Compute urgency_score per sector
-    3. Handle CRITICAL sectors (stock < 30% of target)
-    4. Clamp: no sector below 80% of base_production
-    5. Final budget check
-    """
-    # Build base allocations
-    allocations: dict[str, float] = {}
-    for (sector_id, resource_type), cfg in config.items():
-        key = _sector_key(sector_id, resource_type)
-        allocations[key] = cfg["base_production"]
-
-    # Compute urgency scores
-    urgency: dict[str, float] = {}
-    critical_sectors: list[str] = []
-    for (sector_id, resource_type), cfg in config.items():
-        key = _sector_key(sector_id, resource_type)
-        trend = trends.get(key)
-        if trend is None:
-            urgency[key] = 0.0
-            continue
-
-        deficit = max(0.0, cfg["target_stock"] - trend.current_stock)
-        trend_penalty = max(0.0, -trend.slope) * 10
-        urgency[key] = deficit * 0.6 + trend_penalty * 0.4
-
-        # CRITICAL: stock < 30% of target
-        if trend.current_stock < cfg["target_stock"] * 0.3:
-            critical_sectors.append(key)
-
-    # Sort by urgency descending
-    sorted_keys = sorted(urgency, key=lambda k: urgency[k], reverse=True)
-
-    # Handle critical sectors: boost their production
-    if critical_sectors:
-        for crit_key in critical_sectors:
-            # Find the config for this key
-            crit_cfg = None
-            for (sid, rtype), cfg in config.items():
-                if _sector_key(sid, rtype) == crit_key:
-                    crit_cfg = cfg
-                    break
-            if crit_cfg is None:
-                continue
-
-            # Boost to max feasible (double base, capped by budget)
-            max_units = TOTAL_BUDGET / crit_cfg["cost_per_unit"]
-            allocations[crit_key] = min(crit_cfg["base_production"] * 2.0, max_units)
-
-        # Reduce lower-urgency sectors proportionally to stay within budget
-        _rebalance_budget(allocations, config)
-    else:
-        # Distribute flex budget ($5K) to highest-urgency sectors
-        if sorted_keys and urgency[sorted_keys[0]] > 0:
-            top_key = sorted_keys[0]
-            for (sid, rtype), cfg in config.items():
-                if _sector_key(sid, rtype) == top_key:
-                    extra_units = 5000 / cfg["cost_per_unit"]
-                    allocations[top_key] += extra_units
-                    break
-
-    # Clamp: no sector below 80% of base_production
-    for (sector_id, resource_type), cfg in config.items():
-        key = _sector_key(sector_id, resource_type)
-        min_production = cfg["base_production"] * 0.8
-        allocations[key] = max(allocations[key], min_production)
-
-    # Final budget check and scale down if needed
-    _rebalance_budget(allocations, config)
-
-    return allocations
+    """Delegate to smooth proportional controller."""
+    return solve_simple(
+        trends=trends,
+        config=config,
+        drain_rates={},
+        total_budget=TOTAL_BUDGET,
+    )
 
 
 def _rebalance_budget(
@@ -205,8 +140,11 @@ class Governor:
         self.challenger: ModelSnapshot | None = None
         self.backup: ModelSnapshot | None = None
         self._cycle_count: int = 0
-        self._trend_model = TrendModel()
+        self._trend_model = HoltCUSUMModel()
         self._override_allocations: dict[str, float] = {}
+        self._plan_hold_remaining: int = 0
+        self._plan_stocks: dict[str, float] = {}
+        self._latest_trends: dict[str, TrendResult] = {}
 
     def set_override(self, sector_id: str, resource_type: str, units_per_cycle: float) -> None:
         key = _sector_key(sector_id, resource_type)
@@ -217,14 +155,38 @@ class Governor:
         self._override_allocations.pop(key, None)
 
     async def run_cycle(self, db: AsyncSession) -> ControlAction | None:
-        """Run one governor cycle. Training happens every 2 cycles."""
-        self._cycle_count += 1
-        should_train = self._cycle_count % 2 == 0 or self.champion is None
+        """Run one governor cycle with plan-hold and circuit breaker.
 
-        if should_train:
-            snapshot = await self._train(db)
-            if snapshot is not None:
-                self._promote(snapshot)
+        Always trains (reads latest data) to keep trends fresh.
+        Only applies new allocations when:
+        - Plan hold expired (normal replan)
+        - First cycle (no champion yet)
+        - Circuit breaker tripped (crash or snap detected during hold)
+        """
+        self._cycle_count += 1
+
+        # Always train — keeps trends fresh for circuit breaker checks
+        snapshot = await self._train(db)
+
+        should_apply = (
+            self.champion is None
+            or self._plan_hold_remaining <= 0
+            or self._circuit_breaker_triggered()
+        )
+
+        if should_apply and snapshot is not None:
+            self._promote(snapshot)
+            self._plan_hold_remaining = PLAN_HOLD_CYCLES
+            # Clear JARVIS overrides on replan — they were one-time nudges,
+            # not permanent. JARVIS can re-set them if still needed.
+            self._override_allocations.clear()
+            # Save stocks at plan time for circuit breaker comparison
+            self._plan_stocks = {
+                key: trend.current_stock
+                for key, trend in self._latest_trends.items()
+            }
+        elif self._plan_hold_remaining > 0:
+            self._plan_hold_remaining -= 1
 
         if self.champion is None:
             return None
@@ -290,6 +252,9 @@ class Governor:
             trends[key] = trend
             confidences[key] = trend.confidence
 
+        # Store for circuit breaker checks
+        self._latest_trends = trends
+
         if not trends:
             return None
 
@@ -304,6 +269,31 @@ class Governor:
             overall_confidence=overall_confidence,
         )
 
+    def _circuit_breaker_triggered(self) -> bool:
+        """Break hold early if a sector crashed or a snap event occurred."""
+        if not self._plan_stocks or not self._latest_trends:
+            return False
+        for key, trend in self._latest_trends.items():
+            # Snap/step-change = replan immediately
+            if trend.step_change_detected:
+                logger.info("Circuit breaker: step change on %s", key)
+                return True
+            # Stock dropped >15% of target since plan was made
+            plan_stock = self._plan_stocks.get(key)
+            if plan_stock is None:
+                continue
+            for (sid, rt), cfg in RESOURCE_CONFIG.items():
+                if _sector_key(sid, rt) == key:
+                    target = cfg["target_stock"]
+                    break
+            else:
+                continue
+            drop = plan_stock - trend.current_stock
+            if drop > target * 0.15:
+                logger.info("Circuit breaker: %s dropped %.1f", key, drop)
+                return True
+        return False
+
     def _promote(self, snapshot: ModelSnapshot) -> None:
         """Champion/Challenger swap logic."""
         if self.champion is None:
@@ -316,10 +306,12 @@ class Governor:
             # Challenger wins: champion -> backup, challenger -> champion
             self.backup = self.champion
             self.champion = self.challenger
-            self.challenger = None
         else:
-            # Champion wins: discard challenger
-            self.challenger = None
+            # Champion model wins, but always apply fresh allocations
+            # so the governor responds to current stock conditions
+            self.champion.allocations = snapshot.allocations
+            self.champion.data_points = snapshot.data_points
+        self.challenger = None
 
     def _build_rationale(self, db: AsyncSession, allocations: dict[str, float]) -> str:
         parts: list[str] = []
@@ -474,7 +466,20 @@ class Governor:
         return results
 
     def get_status(self) -> dict:
-        """Return current governor status for the API."""
+        """Return current governor status for the API.
+
+        Allocations reflect the EFFECTIVE values (champion + overrides) — i.e.
+        what is actually being sent to the feed service, not the raw champion
+        computation.  This keeps the UI in sync with reality.
+        """
+        # Build effective allocations (same merge logic as run_cycle)
+        if self.champion:
+            effective = dict(self.champion.allocations)
+            for key, units in self._override_allocations.items():
+                effective[key] = units
+        else:
+            effective = {}
+
         def _snapshot_dict(snap: ModelSnapshot | None) -> dict | None:
             if snap is None:
                 return None
@@ -483,10 +488,10 @@ class Governor:
                 "data_points": snap.data_points,
                 "overall_confidence": round(snap.overall_confidence, 2),
                 "confidences": {k: round(v, 2) for k, v in snap.confidences.items()},
-                "allocations": {k: round(v, 2) for k, v in snap.allocations.items()},
+                "allocations": {k: round(v, 2) for k, v in effective.items()},
             }
 
-        budget_used = self._compute_budget(self.champion.allocations) if self.champion else 0
+        budget_used = self._compute_budget(effective) if effective else 0
         return {
             "champion": _snapshot_dict(self.champion),
             "challenger": _snapshot_dict(self.challenger),

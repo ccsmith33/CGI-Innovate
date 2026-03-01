@@ -3,6 +3,7 @@ import { Geist, Geist_Mono } from 'next/font/google'
 import './globals.css'
 import { Sidebar } from '@/components/layout/sidebar'
 import { ChatWidget } from '@/components/jarvis/chat-widget'
+import { JarvisVoice } from '@/components/voice/jarvis-voice'
 
 const geistSans = Geist({
   variable: '--font-geist-sans',
@@ -29,11 +30,12 @@ export default function RootLayout({
       <body
         className={`${geistSans.variable} ${geistMono.variable} antialiased bg-gray-950 text-gray-100`}
       >
-        <div className="flex min-h-screen">
+        <div className="flex min-h-screen hud-scanline">
           <Sidebar />
           <main className="flex-1 overflow-auto">{children}</main>
         </div>
         <ChatWidget />
+        <JarvisVoice />
       </body>
     </html>
   )

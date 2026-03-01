@@ -9,13 +9,16 @@ import {
   fetchGovernorStatus,
   fetchGovernorDecisions,
   triggerSnap,
+  fetchScenarios,
+  triggerScenario,
+  type ScenarioInfo,
 } from '@/lib/api'
 import type {
   GovernorStatus,
   GovernorDecision,
   GovernorAllocation,
 } from '@/lib/types'
-import { Cpu, Loader2, Zap } from 'lucide-react'
+import { Cpu, Loader2, Zap, AlertTriangle } from 'lucide-react'
 
 /* ── Sector color palette ── */
 const SECTOR_COLORS: Record<string, string> = {
@@ -121,64 +124,30 @@ function BudgetAllocationPanel({
   )
 }
 
-/* ── Model Intelligence Panel ── */
-function ModelIntelligencePanel({ status }: { status: GovernorStatus }) {
-  const models = [
-    { key: 'champion' as const, label: 'JARVIS-\u03b1', tier: 'Champion', border: 'border-yellow-500/60', bg: 'bg-yellow-500/5' },
-    { key: 'challenger' as const, label: 'JARVIS-\u03b2', tier: 'Challenger', border: 'border-gray-400/40', bg: 'bg-gray-400/5' },
-    { key: 'backup' as const, label: 'JARVIS-\u03b3', tier: 'Backup', border: 'border-gray-600/40', bg: 'bg-gray-600/5' },
-  ]
+/* ── Model Intelligence Summary (inline, compact) ── */
+function ModelIntelligenceSummary({ status }: { status: GovernorStatus }) {
+  const champion = status.champion ?? { confidence: 0, data_points: 0, trained_at: new Date().toISOString() }
+  const challenger = status.challenger ?? { confidence: 0, data_points: 0, trained_at: new Date().toISOString() }
+  const backup = status.backup ?? { confidence: 0, data_points: 0, trained_at: new Date().toISOString() }
 
   return (
     <div
-      className="bg-gray-950 rounded-lg border border-gray-800 p-4 space-y-3"
+      className="bg-gray-950 rounded-lg border border-gray-800 px-4 py-2.5"
       data-testid="model-panel"
     >
-      <p className="text-xs text-gray-500 uppercase tracking-wider font-semibold">
-        Model Intelligence
-      </p>
-
-      <div className="space-y-2">
-        {models.map((m) => {
-          const info = status[m.key] ?? { confidence: 0, data_points: 0, trained_at: new Date().toISOString() }
-          const isChallenger = m.key === 'challenger'
-          return (
-            <div
-              key={m.key}
-              data-testid={`model-row-${m.key}`}
-              className={`rounded-md border p-3 flex items-center justify-between ${m.border} ${m.bg} ${isChallenger ? 'relative' : ''}`}
-            >
-              <div className="flex items-center gap-3">
-                <div>
-                  <p className="text-sm font-semibold text-gray-200">{m.label}</p>
-                  <p className="text-xs text-gray-500">{m.tier}</p>
-                </div>
-                {isChallenger && (
-                  <span className="inline-block w-2 h-2 rounded-full bg-blue-400 animate-pulse" />
-                )}
-              </div>
-              <div className="flex items-center gap-4 text-xs text-gray-400">
-                <span>
-                  <strong className="text-gray-200">
-                    {info.confidence.toFixed(1)}%
-                  </strong>{' '}
-                  conf
-                </span>
-                <span>
-                  {info.data_points.toLocaleString()} pts
-                </span>
-                <span className="text-gray-600">
-                  {new Date(info.trained_at).toLocaleDateString('en-US', {
-                    month: 'short',
-                    day: 'numeric',
-                    hour: '2-digit',
-                    minute: '2-digit',
-                  })}
-                </span>
-              </div>
-            </div>
-          )
-        })}
+      <div className="flex items-center gap-2 text-sm text-gray-200">
+        <span className="text-xs text-gray-500 uppercase tracking-wider font-semibold">Active Model:</span>
+        <span className="font-semibold">JARVIS-&#945;</span>
+        <Badge variant="outline" className="text-xs px-1.5 py-0 bg-yellow-500/10 text-yellow-400 border-yellow-500/40">
+          Champion
+        </Badge>
+        <span className="text-xs text-gray-400">{champion.confidence.toFixed(1)}% conf</span>
+        <span className="text-xs text-gray-500">{champion.data_points.toLocaleString()} pts</span>
+      </div>
+      <div className="text-xs text-gray-500 mt-0.5">
+        Challengers: JARVIS-&#946; training
+        <span className="inline-block w-1.5 h-1.5 rounded-full bg-blue-400 animate-pulse mx-1 align-middle" />
+        &middot; JARVIS-&#947; {backup.confidence.toFixed(1)}% conf
       </div>
     </div>
   )
@@ -186,14 +155,7 @@ function ModelIntelligencePanel({ status }: { status: GovernorStatus }) {
 
 /* ── Production Controls ── */
 function allocationStatus(a: GovernorAllocation): string {
-  // Check if current_stock > target_stock => OPTIMAL
-  const key = `${a.sector_id}|${a.resource_type}`
-  const target = TARGET_STOCK[key]
-  if (target != null && a.units_per_cycle > 0) {
-    // We can't directly check stock here, so OPTIMAL is checked at render time
-    // via the optional currentStocks prop
-  }
-  if (a.units_per_cycle <= 0) return 'CRITICAL'
+  if (a.units_per_cycle <= 0) return 'CUTTING'
   if (a.units_per_cycle < 5) return 'CUTTING'
   if (a.units_per_cycle > 20) return 'RAMPING'
   return 'MAINTAINING'
@@ -432,8 +394,75 @@ function SnapButton({ onSnap }: { onSnap: () => Promise<void> }) {
   )
 }
 
+/* ── Crisis Scenario Selector ── */
+function ScenarioSelector() {
+  const [executing, setExecuting] = useState(false)
+  const [message, setMessage] = useState<string | null>(null)
+
+  const { data: scenarios } = useSWR<ScenarioInfo[]>(
+    'scenarios',
+    fetchScenarios,
+    { refreshInterval: 0 }
+  )
+
+  async function handleTrigger(scenarioId: string) {
+    setExecuting(true)
+    setMessage(null)
+    try {
+      const result = await triggerScenario(scenarioId)
+      setMessage(result.message)
+      setTimeout(() => setMessage(null), 5000)
+    } finally {
+      setExecuting(false)
+    }
+  }
+
+  if (!scenarios || scenarios.length === 0) return null
+
+  return (
+    <div className="space-y-2" data-testid="scenario-selector">
+      <p className="text-xs text-gray-500 uppercase tracking-wider font-semibold flex items-center gap-1">
+        <AlertTriangle className="w-3 h-3 text-orange-400" />
+        Crisis Scenarios
+      </p>
+      {message && (
+        <div className="text-xs text-orange-400 bg-orange-500/10 border border-orange-500/30 rounded px-2 py-1">
+          {message}
+        </div>
+      )}
+      <div className="grid grid-cols-1 md:grid-cols-3 gap-2">
+        {scenarios.map((s) => (
+          <Button
+            key={s.id}
+            variant="outline"
+            size="sm"
+            onClick={() => handleTrigger(s.id)}
+            disabled={executing}
+            className="border-gray-700 text-gray-400 hover:bg-orange-500/10 hover:border-orange-500/30 hover:text-orange-400 text-xs justify-start"
+            data-testid={`scenario-${s.id}`}
+          >
+            {executing ? (
+              <Loader2 className="w-3 h-3 animate-spin mr-1" />
+            ) : (
+              <AlertTriangle className="w-3 h-3 mr-1" />
+            )}
+            <span className="truncate">{s.name}</span>
+          </Button>
+        ))}
+      </div>
+    </div>
+  )
+}
+
 /* ── Main Command Center ── */
-export function CommandCenter() {
+export interface CommandCenterProps {
+  /** The resource chart React node to render in Row 1 left */
+  chart?: React.ReactNode
+  /** The TTZ status cards React node to render in Row 1 right */
+  ttzCards?: React.ReactNode
+}
+
+export function CommandCenter({ chart, ttzCards }: CommandCenterProps) {
   const {
     data: status,
     isLoading: statusLoading,
@@ -472,13 +501,9 @@ export function CommandCenter() {
     )
   }
 
-  // Build current stock lookup from time-to-zero data if available
-  // This is fetched by the dashboard page; for now we pass empty
-  // The production cards will use this to detect OPTIMAL status
-
   return (
     <Card
-      className="bg-gray-900 border-gray-800"
+      className="bg-gray-900 border-gray-800 hud-card"
       data-testid="command-center"
     >
       <CardHeader className="pb-3">
@@ -486,26 +511,39 @@ export function CommandCenter() {
           <Cpu className="w-5 h-5 text-blue-400" />
           Sentinel Command Center
           <span className="text-xs text-gray-500 font-normal ml-1">
-            Autonomous Resource Governance
+            Autonomous Resource Governance · Live Feed · ML-Controlled
           </span>
         </CardTitle>
       </CardHeader>
       <CardContent className="space-y-4">
-        {/* Top row: Budget + Model Intelligence side-by-side */}
-        <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
-          <BudgetAllocationPanel
-            allocations={status.current_allocations ?? []}
-            totalBudgetUsed={status.total_budget_used ?? 0}
-            totalBudget={status.total_budget ?? 0}
-          />
-          <ModelIntelligencePanel status={status} />
+        {/* Row 1: Chart (~60%) + TTZ Cards (~40%) */}
+        <div className="grid grid-cols-1 lg:grid-cols-5 gap-4">
+          <div className="lg:col-span-3" data-testid="cc-chart-area">
+            {chart}
+          </div>
+          <div className="lg:col-span-2 max-h-[480px] overflow-y-auto" data-testid="cc-ttz-area">
+            {ttzCards}
+          </div>
         </div>
 
-        {/* Production Controls */}
-        <ProductionControls allocations={status.current_allocations ?? []} />
+        {/* Row 2: Budget + Production Controls (~55%) | Model Summary + Decision Log (~45%) */}
+        <div className="grid grid-cols-1 lg:grid-cols-11 gap-4">
+          <div className="lg:col-span-6 space-y-4">
+            <BudgetAllocationPanel
+              allocations={status.current_allocations ?? []}
+              totalBudgetUsed={status.total_budget_used ?? 0}
+              totalBudget={status.total_budget ?? 0}
+            />
+            <ProductionControls allocations={status.current_allocations ?? []} />
+          </div>
+          <div className="lg:col-span-5 space-y-4">
+            <ModelIntelligenceSummary status={status} />
+            <DecisionLog decisions={Array.isArray(decisions) ? decisions : []} />
+          </div>
+        </div>
 
-        {/* Decision Log */}
-        <DecisionLog decisions={Array.isArray(decisions) ? decisions : []} />
+        {/* Crisis Scenarios */}
+        <ScenarioSelector />
 
         {/* SNAP */}
         <SnapButton onSnap={handleSnap} />

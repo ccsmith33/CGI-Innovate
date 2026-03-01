@@ -14,6 +14,8 @@ from app.services.jarvis_forecast import DEFAULT_STRATEGY, ForecastService
 from app.services.strategies.exponential_decay import ExponentialDecayStrategy
 from app.services.strategies.linear_regression import LinearRegressionStrategy
 from app.services.strategies.polynomial_regression import PolynomialRegressionStrategy
+from app.services.strategies.moving_average import MovingAverageStrategy
+from app.services.strategies.bayesian import BayesianRidgeStrategy
 
 router = APIRouter(prefix="/forecasts", tags=["forecasts"])
 
@@ -118,3 +120,73 @@ async def compare_forecasts(
         }
 
     return {"sector_id": sector_id, "resource_type": resource_type, "forecasts": results}
+
+
+# In-memory leaderboard state
+_leaderboard_scores: dict[str, list[float]] = {}
+_leaderboard_streaks: dict[str, int] = {}
+
+
+@router.get("/leaderboard")
+async def forecast_leaderboard(db: AsyncSession = Depends(get_db)):
+    """Return ranked forecast models with accuracy scores."""
+    # Run all strategies on available data and score by R-squared / confidence
+    result = await db.execute(
+        select(ResourceLog).order_by(ResourceLog.timestamp)
+    )
+    rows = result.scalars().all()
+
+    if not rows:
+        return {"models": []}
+
+    timestamps = [r.timestamp for r in rows]
+    stock_levels = [r.stock_level for r in rows]
+    snap_flags = [r.snap_event_detected for r in rows]
+
+    strategies = {
+        "Polynomial Regression": PolynomialRegressionStrategy(),
+        "Bayesian Ridge": BayesianRidgeStrategy(),
+        "Linear Regression": LinearRegressionStrategy(),
+        "Moving Average": MovingAverageStrategy(),
+        "Exponential Decay": ExponentialDecayStrategy(),
+    }
+
+    scored: list[dict] = []
+    for name, strategy in strategies.items():
+        strategy.fit(timestamps, stock_levels, snap_flags)
+        forecast = strategy.predict_exhaustion_date()
+        accuracy = round(max(0.0, min(1.0, forecast.confidence)), 4)
+
+        # Track rolling accuracy
+        if name not in _leaderboard_scores:
+            _leaderboard_scores[name] = []
+        _leaderboard_scores[name].append(accuracy)
+        if len(_leaderboard_scores[name]) > 20:
+            _leaderboard_scores[name] = _leaderboard_scores[name][-20:]
+
+        avg_accuracy = round(
+            sum(_leaderboard_scores[name]) / len(_leaderboard_scores[name]), 4
+        )
+        scored.append({"name": name, "accuracy": avg_accuracy})
+
+    # Sort by accuracy descending
+    scored.sort(key=lambda m: m["accuracy"], reverse=True)
+
+    # Assign ranks, champion, streaks
+    champion_name = scored[0]["name"] if scored else None
+    _leaderboard_streaks[champion_name] = _leaderboard_streaks.get(champion_name, 0) + 1
+    for name in _leaderboard_streaks:
+        if name != champion_name:
+            _leaderboard_streaks[name] = 0
+
+    models = []
+    for rank, entry in enumerate(scored, 1):
+        models.append({
+            "name": entry["name"],
+            "accuracy": entry["accuracy"],
+            "rank": rank,
+            "champion": entry["name"] == champion_name,
+            "streak": _leaderboard_streaks.get(entry["name"], 0),
+        })
+
+    return {"models": models}

@@ -2,8 +2,9 @@ import json
 import logging
 from datetime import datetime, timedelta, timezone
 
+from anthropic import AsyncAnthropic
 from fastapi import APIRouter, Depends
-from openai import AsyncOpenAI
+from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 from sqlalchemy import distinct, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -26,120 +27,107 @@ router = APIRouter(prefix="/jarvis", tags=["jarvis"])
 JARVIS_SYSTEM_PROMPT = (
     "You are JARVIS, the AI Command & Control intelligence for Project Sentinel. "
     "You have access to live data tools. You speak in a professional, tactical manner. "
-    "Keep responses concise and actionable. Reference specific data when answering."
+    "RESPONSE RULES (ABSOLUTE): "
+    "Maximum 1 sentence. Never 2. Never a list. "
+    "Never enumerate individual resources by name. "
+    "Give ONE overall status or the single most critical issue only. "
+    "Examples of correct responses: "
+    "\"All sectors recovering, Vibranium is the most at risk at 36%.\" "
+    "\"Resources are stable. No immediate threats.\" "
+    "\"Pym Particles critical at 8%, governor is compensating.\" "
+    "No markdown, no bullets, no percentages for every resource."
 )
 
-TOOL_DEFINITIONS = [
+ANTHROPIC_TOOL_DEFINITIONS = [
     {
-        "type": "function",
-        "function": {
-            "name": "get_all_forecasts",
-            "description": "Returns all 5 forecasts with sector, resource, hours_until_exhaustion, predicted_exhaustion_date, confidence, strategy",
-            "parameters": {"type": "object", "properties": {}, "required": []},
-        },
+        "name": "get_all_forecasts",
+        "description": "Returns all 5 forecasts with sector, resource, hours_until_exhaustion, predicted_exhaustion_date, confidence, strategy",
+        "input_schema": {"type": "object", "properties": {}, "required": []},
     },
     {
-        "type": "function",
-        "function": {
-            "name": "get_resource_summary",
-            "description": "Returns current stock levels and latest usage rates for all sectors",
-            "parameters": {"type": "object", "properties": {}, "required": []},
-        },
+        "name": "get_resource_summary",
+        "description": "Returns current stock levels and latest usage rates for all sectors",
+        "input_schema": {"type": "object", "properties": {}, "required": []},
     },
     {
-        "type": "function",
-        "function": {
-            "name": "get_anomalies",
-            "description": "Runs IsolationForest anomaly detection for the given sector and resource type, returns anomaly list",
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "sector_id": {"type": "string", "description": "The sector name"},
-                    "resource_type": {"type": "string", "description": "The resource type"},
-                },
-                "required": ["sector_id", "resource_type"],
+        "name": "get_anomalies",
+        "description": "Runs IsolationForest anomaly detection for the given sector and resource type, returns anomaly list",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "sector_id": {"type": "string", "description": "The sector name"},
+                "resource_type": {"type": "string", "description": "The resource type"},
             },
+            "required": ["sector_id", "resource_type"],
         },
     },
     {
-        "type": "function",
-        "function": {
-            "name": "get_intel_reports",
-            "description": "Returns recent intel reports with redacted_text, extracted_entities, severity, sector",
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "status": {
-                        "type": "string",
-                        "description": "Filter by status (e.g. 'processed', 'pending'). Use 'all' for no filter.",
-                        "default": "all",
-                    },
-                    "priority": {
-                        "type": "string",
-                        "description": "Filter by priority (e.g. 'critical', 'high'). Use 'all' for no filter.",
-                        "default": "all",
-                    },
-                    "limit": {
-                        "type": "integer",
-                        "description": "Max number of reports to return",
-                        "default": 10,
-                    },
+        "name": "get_intel_reports",
+        "description": "Returns recent intel reports with redacted_text, extracted_entities, severity, sector",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "status": {
+                    "type": "string",
+                    "description": "Filter by status (e.g. 'processed', 'pending'). Use 'all' for no filter.",
+                    "default": "all",
                 },
-                "required": [],
+                "priority": {
+                    "type": "string",
+                    "description": "Filter by priority (e.g. 'critical', 'high'). Use 'all' for no filter.",
+                    "default": "all",
+                },
+                "limit": {
+                    "type": "integer",
+                    "description": "Max number of reports to return",
+                    "default": 10,
+                },
             },
+            "required": [],
         },
     },
     {
-        "type": "function",
-        "function": {
-            "name": "get_redaction_log",
-            "description": "Returns recent redaction audit entries",
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "limit": {
-                        "type": "integer",
-                        "description": "Max number of entries to return",
-                        "default": 10,
-                    },
+        "name": "get_redaction_log",
+        "description": "Returns recent redaction audit entries",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "limit": {
+                    "type": "integer",
+                    "description": "Max number of entries to return",
+                    "default": 10,
                 },
-                "required": [],
             },
+            "required": [],
         },
     },
     {
-        "type": "function",
-        "function": {
-            "name": "get_forecast_comparison",
-            "description": "Runs all 3 forecast strategies (linear, polynomial, exponential) for a sector+resource and returns comparison",
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "sector_id": {"type": "string", "description": "The sector name"},
-                    "resource_type": {"type": "string", "description": "The resource type"},
-                },
-                "required": ["sector_id", "resource_type"],
+        "name": "get_forecast_comparison",
+        "description": "Runs all 3 forecast strategies (linear, polynomial, exponential) for a sector+resource and returns comparison",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "sector_id": {"type": "string", "description": "The sector name"},
+                "resource_type": {"type": "string", "description": "The resource type"},
             },
+            "required": ["sector_id", "resource_type"],
         },
     },
     {
-        "type": "function",
-        "function": {
-            "name": "get_resource_history",
-            "description": "Returns resource log entries for the last N hours for a given sector and resource type",
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "sector_id": {"type": "string", "description": "The sector name"},
-                    "resource_type": {"type": "string", "description": "The resource type"},
-                    "hours_back": {
-                        "type": "integer",
-                        "description": "Number of hours to look back",
-                        "default": 24,
-                    },
+        "name": "get_resource_history",
+        "description": "Returns resource log entries for the last N hours for a given sector and resource type",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "sector_id": {"type": "string", "description": "The sector name"},
+                "resource_type": {"type": "string", "description": "The resource type"},
+                "hours_back": {
+                    "type": "integer",
+                    "description": "Number of hours to look back",
+                    "default": 24,
                 },
-                "required": ["sector_id", "resource_type"],
             },
+            "required": ["sector_id", "resource_type"],
         },
     },
 ]
@@ -382,42 +370,42 @@ FUNCTION_DISPATCH = {
 
 @router.post("/chat", response_model=JarvisChatResponse)
 async def jarvis_chat(body: JarvisChatRequest, db: AsyncSession = Depends(get_db)):
-    if not settings.OPENAI_API_KEY:
+    if not settings.ANTHROPIC_API_KEY:
         return JarvisChatResponse(
             reply="JARVIS is offline. API key not configured.",
             function_calls_made=[],
         )
 
-    messages = [{"role": "system", "content": JARVIS_SYSTEM_PROMPT}]
+    messages = []
     for msg in body.conversation_history:
         messages.append({"role": msg.role, "content": msg.content})
     messages.append({"role": "user", "content": body.message})
 
-    client = AsyncOpenAI(api_key=settings.OPENAI_API_KEY)
+    client = AsyncAnthropic(api_key=settings.ANTHROPIC_API_KEY)
     function_calls_made: list[str] = []
 
     # Allow up to 5 rounds of function calling
     for _ in range(5):
-        response = await client.chat.completions.create(
-            model="gpt-4o-mini",
+        response = await client.messages.create(
+            model="claude-haiku-4-5-20251001",
+            max_tokens=60,
+            system=JARVIS_SYSTEM_PROMPT,
             messages=messages,
-            tools=TOOL_DEFINITIONS,
+            tools=ANTHROPIC_TOOL_DEFINITIONS,
         )
 
-        choice = response.choices[0]
+        tool_use_blocks = [b for b in response.content if b.type == "tool_use"]
 
-        if choice.finish_reason == "tool_calls" and choice.message.tool_calls:
-            # Add the assistant's message with tool calls
-            messages.append(choice.message)
+        if response.stop_reason == "tool_use" and tool_use_blocks:
+            # Add assistant message with ALL content blocks
+            messages.append({"role": "assistant", "content": response.content})
 
-            for tool_call in choice.message.tool_calls:
-                fn_name = tool_call.function.name
+            # Add tool results as a single user message
+            tool_results = []
+            for block in tool_use_blocks:
+                fn_name = block.name
+                fn_args = block.input  # already a dict
                 function_calls_made.append(fn_name)
-
-                try:
-                    fn_args = json.loads(tool_call.function.arguments) if tool_call.function.arguments else {}
-                except json.JSONDecodeError:
-                    fn_args = {}
 
                 handler = FUNCTION_DISPATCH.get(fn_name)
                 if handler:
@@ -425,14 +413,16 @@ async def jarvis_chat(body: JarvisChatRequest, db: AsyncSession = Depends(get_db
                 else:
                     result_str = json.dumps({"error": f"Unknown function: {fn_name}"})
 
-                messages.append({
-                    "role": "tool",
-                    "tool_call_id": tool_call.id,
+                tool_results.append({
+                    "type": "tool_result",
+                    "tool_use_id": block.id,
                     "content": result_str,
                 })
+            messages.append({"role": "user", "content": tool_results})
         else:
             # Final response from the model
-            reply = choice.message.content or ""
+            text_blocks = [b for b in response.content if b.type == "text"]
+            reply = text_blocks[0].text if text_blocks else ""
             return JarvisChatResponse(reply=reply, function_calls_made=function_calls_made)
 
     # If we exhaust the loop, return the last response
@@ -440,3 +430,66 @@ async def jarvis_chat(body: JarvisChatRequest, db: AsyncSession = Depends(get_db
         reply="I've gathered the data but couldn't formulate a final response. Please try again.",
         function_calls_made=function_calls_made,
     )
+
+
+@router.post("/chat-stream")
+async def jarvis_chat_stream(body: JarvisChatRequest, db: AsyncSession = Depends(get_db)):
+    if not settings.ANTHROPIC_API_KEY:
+        async def offline():
+            yield f'data: {json.dumps({"type": "chunk", "text": "JARVIS is offline. API key not configured."})}\n\n'
+            yield f'data: {json.dumps({"type": "done"})}\n\n'
+        return StreamingResponse(offline(), media_type="text/event-stream")
+
+    async def generate():
+        messages = []
+        for msg in body.conversation_history:
+            messages.append({"role": msg.role, "content": msg.content})
+        messages.append({"role": "user", "content": body.message})
+
+        client = AsyncAnthropic(api_key=settings.ANTHROPIC_API_KEY)
+
+        # Tool calling rounds (non-streaming)
+        for _ in range(5):
+            response = await client.messages.create(
+                model="claude-haiku-4-5-20251001",
+                max_tokens=60,
+                system=JARVIS_SYSTEM_PROMPT,
+                messages=messages,
+                tools=ANTHROPIC_TOOL_DEFINITIONS,
+            )
+
+            tool_use_blocks = [b for b in response.content if b.type == "tool_use"]
+
+            if response.stop_reason == "tool_use" and tool_use_blocks:
+                messages.append({"role": "assistant", "content": response.content})
+                tool_results = []
+                for block in tool_use_blocks:
+                    fn_name = block.name
+                    fn_args = block.input
+                    handler = FUNCTION_DISPATCH.get(fn_name)
+                    result_str = await handler(db, fn_args) if handler else json.dumps({"error": f"Unknown function: {fn_name}"})
+                    tool_results.append({
+                        "type": "tool_result",
+                        "tool_use_id": block.id,
+                        "content": result_str,
+                    })
+                messages.append({"role": "user", "content": tool_results})
+            else:
+                # Final response — stream it
+                async with client.messages.stream(
+                    model="claude-haiku-4-5-20251001",
+                    max_tokens=60,
+                    system=JARVIS_SYSTEM_PROMPT,
+                    messages=messages,
+                    tools=ANTHROPIC_TOOL_DEFINITIONS,
+                ) as stream:
+                    async for text in stream.text_stream:
+                        yield f'data: {json.dumps({"type": "chunk", "text": text})}\n\n'
+                yield f'data: {json.dumps({"type": "done"})}\n\n'
+                return
+
+        # Exhausted loop
+        yield f'data: {json.dumps({"type": "chunk", "text": "Could not formulate a response. Please try again."})}\n\n'
+        yield f'data: {json.dumps({"type": "done"})}\n\n'
+
+    return StreamingResponse(generate(), media_type="text/event-stream")

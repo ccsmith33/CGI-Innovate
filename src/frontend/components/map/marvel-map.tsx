@@ -10,10 +10,11 @@ import {
   Cpu,
 } from 'lucide-react'
 import type { Forecast, SummaryItem, TimeToZeroEntry, NetStatus } from '@/lib/types'
-import { computeNetStatus } from '@/lib/api'
+import { computeNetStatus, TARGET_STOCK } from '@/lib/api'
 
 const STATUS_COLORS: Record<NetStatus, string> = {
   STABLE: '#22C55E',
+  OPTIMAL: '#34D399',
   RECOVERING: '#F97316',
   LOW: '#F97316',
   CRITICAL: '#EF4444',
@@ -44,15 +45,9 @@ function getStatus(ttzEntry: TimeToZeroEntry | undefined): NetStatus {
 
 function getStockPercent(summary: SummaryItem | undefined): number {
   if (!summary) return 0
-  const initialStockEstimates: Record<string, number> = {
-    'Medical Kits': 500,
-    'Vibranium (kg)': 300,
-    'Clean Water (L)': 10000,
-    'Pym Particles': 200,
-    'Arc Reactor Cores': 100,
-  }
-  const initial = initialStockEstimates[summary.resource_type] ?? 1000
-  return Math.min(100, Math.max(0, (summary.latest_stock_level / initial) * 100))
+  const key = `${summary.sector_id}|${summary.resource_type}`
+  const target = TARGET_STOCK[key] ?? 500
+  return Math.min(100, Math.max(0, (summary.latest_stock_level / target) * 100))
 }
 
 function HexIcon({ icon, x, y }: { icon: string; x: number; y: number }) {

@@ -145,7 +145,7 @@ export function IntelTable() {
     error,
     isLoading,
     mutate,
-  } = useSWR('reports', () => fetchReports(), { refreshInterval: 3000 })
+  } = useSWR('reports', () => fetchReports({ limit: 200 }), { refreshInterval: 3000 })
 
   const reports: IntelReport[] = reportsData?.data ?? []
 

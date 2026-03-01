@@ -1,9 +1,13 @@
+import base64
+import json
+import logging
 from datetime import datetime, timezone
 
-from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query
+from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query, UploadFile
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.config import settings
 from app.database import get_db, get_session_factory
 from app.models.intel_report import IntelReport
 from app.models.redaction_log import RedactionLog
@@ -16,6 +20,8 @@ from app.schemas.report import (
     ReportSubmitResponse,
 )
 from app.services.shield import redact_pii
+
+logger = logging.getLogger(__name__)
 
 
 class RedactionPreviewRequest(BaseModel):
@@ -165,3 +171,72 @@ async def preview_redaction(body: RedactionPreviewRequest):
         redacted=result.redacted_text,
         patterns_matched=result.patterns_matched,
     )
+
+
+@router.post("/analyze-image")
+async def analyze_image(
+    file: UploadFile,
+    db: AsyncSession = Depends(get_db),
+):
+    """Analyze a field intelligence photograph using Claude Vision."""
+    image_data = await file.read()
+    b64 = base64.standard_b64encode(image_data).decode()
+    media_type = file.content_type or "image/jpeg"
+
+    from anthropic import AsyncAnthropic
+
+    client = AsyncAnthropic(api_key=settings.ANTHROPIC_API_KEY)
+
+    response = await client.messages.create(
+        model="claude-haiku-4-5-20251001",
+        max_tokens=500,
+        messages=[{
+            "role": "user",
+            "content": [
+                {
+                    "type": "image",
+                    "source": {"type": "base64", "media_type": media_type, "data": b64},
+                },
+                {
+                    "type": "text",
+                    "text": (
+                        "You are JARVIS analyzing a field intelligence photograph for Project Sentinel.\n\n"
+                        "Analyze this image and respond ONLY in this JSON format:\n"
+                        "{\n"
+                        '  "threat_type": "one of: infrastructure_damage, hostile_activity, resource_disruption, environmental_hazard, civilian_impact, unknown",\n'
+                        '  "affected_sector": "one of: Avengers Compound, New Asgard, Sanctum Sanctorum, Sokovia, Wakanda, Unknown",\n'
+                        '  "severity": "LOW|MEDIUM|HIGH|CRITICAL",\n'
+                        '  "resources_at_risk": ["list of affected resource types"],\n'
+                        '  "summary": "2-3 sentence intelligence assessment",\n'
+                        '  "recommended_action": "specific action for the commander"\n'
+                        "}"
+                    ),
+                },
+            ],
+        }],
+    )
+
+    try:
+        result = json.loads(response.content[0].text)
+    except (json.JSONDecodeError, IndexError) as exc:
+        raise HTTPException(status_code=502, detail=f"Failed to parse VLM response: {exc}")
+
+    report = IntelReport(
+        raw_text=f"[VISUAL INTEL] {result.get('summary', '')}",
+        redacted_text=result.get("summary", ""),
+        priority="High",
+        status="processed",
+        timestamp=datetime.now(timezone.utc),
+        extracted_entities={
+            "sector_id": result.get("affected_sector", "Unknown"),
+            "resource_type": ", ".join(result.get("resources_at_risk", [])),
+            "severity": result.get("severity", "MEDIUM"),
+            "summary": result.get("summary", ""),
+            "threat_type": result.get("threat_type", "unknown"),
+            "recommended_action": result.get("recommended_action", ""),
+        },
+    )
+    db.add(report)
+    await db.commit()
+
+    return {"analysis": result, "report_id": report.report_id}

@@ -119,49 +119,55 @@ export async function sendJarvisMessage(
 
 // Cost-per-unit lookup matching backend resource_config.py
 const COST_PER_UNIT: Record<string, number> = {
-  'Avengers Compound|Medical Kits': 3500,
+  'Avengers Compound|Medical Kits': 1750,
   'New Asgard|Vibranium (kg)': 4000,
   'Sanctum Sanctorum|Clean Water (L)': 1000,
   'Sokovia|Pym Particles': 4500,
   'Wakanda|Arc Reactor Cores': 5000,
 }
 
+// Base production units_per_cycle matching backend resource_config.py
+const BASE_PRODUCTION: Record<string, number> = {
+  'Avengers Compound|Medical Kits': 8.0,
+  'New Asgard|Vibranium (kg)': 3.0,
+  'Sanctum Sanctorum|Clean Water (L)': 10.0,
+  'Sokovia|Pym Particles': 5.0,
+  'Wakanda|Arc Reactor Cores': 4.0,
+}
+
 // Target stock per sector|resource matching backend resource_config.py
 export const TARGET_STOCK: Record<string, number> = {
   'Avengers Compound|Medical Kits': 600,
-  'New Asgard|Vibranium (kg)': 450,
-  'Sanctum Sanctorum|Clean Water (L)': 700,
-  'Sokovia|Pym Particles': 500,
-  'Wakanda|Arc Reactor Cores': 500,
+  'New Asgard|Vibranium (kg)': 300,
+  'Sanctum Sanctorum|Clean Water (L)': 750,
+  'Sokovia|Pym Particles': 420,
+  'Wakanda|Arc Reactor Cores': 180,
 }
 
 /**
- * Compute the status badge based on net rate (production - consumption) and stock levels.
+ * Compute the status badge from stock position relative to target.
  *
- * The hours_to_zero value is the "no production" time to zero and is kept as informational
- * text. The STATUS BADGE reflects the actual net trend from the governor.
+ * Priority:
+ *   1. EXHAUSTED: stock <= 10
+ *   2. CRITICAL: stock < 20% of target
+ *   3. RECOVERING: stock < 75% of target (governor is ramping to close gap)
+ *   4. OPTIMAL: stock > 120% of target (governor is cutting back surplus)
+ *   5. STABLE: stock within 75-120% of target (near target, holding steady)
  */
 export function computeNetStatus(entry: TimeToZeroEntry): NetStatus {
   const stock = entry.current_stock
-  const h = entry.hours_to_zero
+  const target = entry.target_stock
 
   if (stock <= 10) return 'EXHAUSTED'
 
-  const productionRate = entry.production_rate_hourly ?? 0
-  const consumptionRate = entry.consumption_rate
-  const netHourly = productionRate - consumptionRate
-  const key = `${entry.sector_id}|${entry.resource_type}`
-  const targetStock = entry.target_stock ?? TARGET_STOCK[key] ?? 500
-
-  if (netHourly >= 0) {
-    if (stock >= targetStock * 0.9) return 'STABLE'
-    return 'RECOVERING'
+  if (target != null && target > 0) {
+    const pct = stock / target
+    if (pct < 0.2) return 'CRITICAL'
+    if (pct < 0.75) return 'RECOVERING'
+    if (pct > 1.2) return 'OPTIMAL'
   }
 
-  // net_hourly < 0: consumption exceeds production
-  if (h != null && h < 4) return 'DEPLETING'
-  if (h != null && h >= 4 && h <= 24) return 'CRITICAL'
-  return 'LOW'
+  return 'STABLE'
 }
 
 function normalizeModelInfo(raw: Record<string, unknown> | null): GovernorModelInfo {
@@ -178,11 +184,16 @@ function normalizeAllocations(raw: Record<string, number> | null | undefined): G
   return Object.entries(raw).map(([key, units]) => {
     const [sector_id, resource_type] = key.split('|', 2)
     const costPerUnit = COST_PER_UNIT[key] ?? 1
+    const baseProd = BASE_PRODUCTION[key] ?? 5.0
+    let status: GovernorAllocation['status'] = 'MAINTAINING'
+    if (units < baseProd * 0.9) status = 'CUTTING'
+    else if (units > baseProd * 1.5) status = 'RAMPING'
     return {
       sector_id: sector_id ?? key,
       resource_type: resource_type ?? '',
       units_per_cycle: units,
       cost_per_cycle: units * costPerUnit,
+      status,
     }
   })
 }
@@ -260,6 +271,74 @@ export async function overrideProduction(
     body: JSON.stringify({ sector_id, resource_type, units_per_cycle }),
   })
   if (!res.ok) throw new Error(`Failed to override production: ${res.status}`)
+  return res.json()
+}
+
+export interface DefconStatus {
+  level: number
+  label: string
+  color: string
+}
+
+export async function fetchDefcon(): Promise<DefconStatus> {
+  const res = await fetch(`${V1}/feed/defcon`)
+  if (!res.ok) throw new Error(`Failed to fetch DEFCON: ${res.status}`)
+  return res.json()
+}
+
+export interface ImageAnalysis {
+  threat_type: string
+  affected_sector: string
+  severity: string
+  resources_at_risk: string[]
+  summary: string
+  recommended_action: string
+}
+
+export async function analyzeImage(file: File): Promise<{ analysis: ImageAnalysis; report_id: string }> {
+  const formData = new FormData()
+  formData.append('file', file)
+  const res = await fetch(`${V1}/reports/analyze-image`, {
+    method: 'POST',
+    body: formData,
+  })
+  if (!res.ok) throw new Error(`Failed to analyze image: ${res.status}`)
+  return res.json()
+}
+
+export interface ScenarioInfo {
+  id: string
+  name: string
+  description: string
+}
+
+export async function fetchScenarios(): Promise<ScenarioInfo[]> {
+  const res = await fetch(`${V1}/governor/scenarios`)
+  if (!res.ok) throw new Error(`Failed to fetch scenarios: ${res.status}`)
+  return res.json()
+}
+
+export async function triggerScenario(scenarioId: string): Promise<{ message: string; steps: number }> {
+  const res = await fetch(`${V1}/governor/scenario/${encodeURIComponent(scenarioId)}`, {
+    method: 'POST',
+  })
+  if (!res.ok) throw new Error(`Failed to trigger scenario: ${res.status}`)
+  return res.json()
+}
+
+export async function pauseAgent(): Promise<void> {
+  const res = await fetch(`${V1}/agent/pause`, { method: 'POST' })
+  if (!res.ok) throw new Error(`Failed to pause agent: ${res.status}`)
+}
+
+export async function resumeAgent(): Promise<void> {
+  const res = await fetch(`${V1}/agent/resume`, { method: 'POST' })
+  if (!res.ok) throw new Error(`Failed to resume agent: ${res.status}`)
+}
+
+export async function fetchAgentStatus(): Promise<{ paused: boolean }> {
+  const res = await fetch(`${V1}/agent/status`)
+  if (!res.ok) throw new Error(`Failed to fetch agent status: ${res.status}`)
   return res.json()
 }
 

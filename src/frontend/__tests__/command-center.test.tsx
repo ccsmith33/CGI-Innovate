@@ -3,7 +3,7 @@
  *
  * Validates:
  *  1. Budget allocation panel renders with correct total
- *  2. Model intelligence shows champion/challenger/backup rows
+ *  2. Model intelligence shows inline summary with champion/challenger/backup
  *  3. SNAP button requires confirmation before firing
  *  4. Decision log renders rationale entries with truncation
  *  5. Production controls show 5 sectors
@@ -24,11 +24,11 @@ jest.mock('swr', () => ({
           challenger: { confidence: 87.0, data_points: 800, trained_at: '2026-02-28T09:00:00Z' },
           backup: { confidence: 72.0, data_points: 200, trained_at: '2026-02-27T08:00:00Z' },
           current_allocations: [
-            { sector_id: 'Avengers Compound', resource_type: 'Medical Kits', units_per_cycle: 15, cost_per_cycle: 18000 },
-            { sector_id: 'New Asgard', resource_type: 'Vibranium (kg)', units_per_cycle: 8, cost_per_cycle: 22000 },
-            { sector_id: 'Sanctum Sanctorum', resource_type: 'Clean Water (L)', units_per_cycle: 25, cost_per_cycle: 12000 },
-            { sector_id: 'Sokovia', resource_type: 'Pym Particles', units_per_cycle: 3, cost_per_cycle: 30000 },
-            { sector_id: 'Wakanda', resource_type: 'Arc Reactor Cores', units_per_cycle: 10, cost_per_cycle: 18000 },
+            { sector_id: 'Avengers Compound', resource_type: 'Medical Kits', units_per_cycle: 15, cost_per_cycle: 18000, status: 'CRITICAL' },
+            { sector_id: 'New Asgard', resource_type: 'Vibranium (kg)', units_per_cycle: 8, cost_per_cycle: 22000, status: 'CRITICAL' },
+            { sector_id: 'Sanctum Sanctorum', resource_type: 'Clean Water (L)', units_per_cycle: 25, cost_per_cycle: 12000, status: 'CRITICAL' },
+            { sector_id: 'Sokovia', resource_type: 'Pym Particles', units_per_cycle: 3, cost_per_cycle: 30000, status: 'CUTTING' },
+            { sector_id: 'Wakanda', resource_type: 'Arc Reactor Cores', units_per_cycle: 10, cost_per_cycle: 18000, status: 'CRITICAL' },
           ],
           total_budget_used: 82000,
           total_budget: 100000,
@@ -59,6 +59,16 @@ jest.mock('swr', () => ({
         isLoading: false,
       }
     }
+    if (key === 'scenarios') {
+      return {
+        data: [
+          { id: 'thanos_incursion', name: 'Thanos Incursion', description: 'Multi-sector cascade' },
+          { id: 'hydra_sabotage', name: 'HYDRA Sabotage', description: 'Targeted strike' },
+          { id: 'pandemic_surge', name: 'Pandemic Surge', description: 'Health crisis' },
+        ],
+        isLoading: false,
+      }
+    }
     return { data: null, isLoading: false }
   }),
 }))
@@ -68,6 +78,10 @@ jest.mock('@/lib/api', () => ({
   fetchGovernorStatus: jest.fn(),
   fetchGovernorDecisions: jest.fn(),
   triggerSnap: jest.fn().mockResolvedValue({ message: 'ok' }),
+  fetchScenarios: jest.fn().mockResolvedValue([
+    { id: 'thanos_incursion', name: 'Thanos Incursion', description: 'Multi-sector cascade' },
+  ]),
+  triggerScenario: jest.fn().mockResolvedValue({ message: 'Scenario initiated', steps: 6 }),
 }))
 
 // Mock lucide-react
@@ -75,6 +89,7 @@ jest.mock('lucide-react', () => ({
   Cpu: () => <span>cpu</span>,
   Loader2: () => <span>loader</span>,
   Zap: () => <span>zap</span>,
+  AlertTriangle: () => <span>alert</span>,
 }))
 
 import { CommandCenter } from '@/components/command-center/command-center'
@@ -88,7 +103,7 @@ describe('CommandCenter', () => {
   })
 
   it('renders the command center container', () => {
-    render(<CommandCenter />)
+    render(<CommandCenter chart={<div data-testid="test-chart" />} ttzCards={<div data-testid="test-ttz" />} />)
     expect(screen.getByTestId('command-center')).toBeInTheDocument()
     expect(screen.getByText('Sentinel Command Center')).toBeInTheDocument()
   })
@@ -102,16 +117,14 @@ describe('CommandCenter', () => {
     expect(screen.getByText(/\$100,000/)).toBeInTheDocument()
   })
 
-  it('renders champion, challenger, and backup model rows', () => {
+  it('renders inline model intelligence summary', () => {
     render(<CommandCenter />)
-    expect(screen.getByTestId('model-row-champion')).toBeInTheDocument()
-    expect(screen.getByTestId('model-row-challenger')).toBeInTheDocument()
-    expect(screen.getByTestId('model-row-backup')).toBeInTheDocument()
+    expect(screen.getByTestId('model-panel')).toBeInTheDocument()
 
-    // Check labels
+    // Check inline summary labels
     expect(screen.getByText('JARVIS-\u03b1')).toBeInTheDocument()
-    expect(screen.getByText('JARVIS-\u03b2')).toBeInTheDocument()
-    expect(screen.getByText('JARVIS-\u03b3')).toBeInTheDocument()
+    expect(screen.getByText(/JARVIS-\u03b2 training/)).toBeInTheDocument()
+    expect(screen.getByText(/JARVIS-\u03b3/)).toBeInTheDocument()
   })
 
   it('SNAP button requires confirmation before firing', async () => {

@@ -82,6 +82,16 @@ async def update_production(body: ProductionUpdate):
     }
 
 
+@app.get("/feed/defcon")
+async def defcon_status():
+    level = state.get_defcon()
+    return {
+        "level": level,
+        "label": state.DEFCON_LABELS[level],
+        "color": state.DEFCON_COLORS[level],
+    }
+
+
 @app.post("/control/snap")
 async def snap():
     stocks = state.get_stocks()

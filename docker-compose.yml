@@ -5,6 +5,8 @@ services:
       dockerfile: Dockerfile
       args:
         NEXT_PUBLIC_API_URL: ${NEXT_PUBLIC_API_URL:-http://localhost:8000}
+        NEXT_PUBLIC_ELEVENLABS_API_KEY: ${NEXT_PUBLIC_ELEVENLABS_API_KEY}
+        NEXT_PUBLIC_ELEVENLABS_VOICE_ID: ${NEXT_PUBLIC_ELEVENLABS_VOICE_ID:-nPczCjzI2devNBz1zQrb}
     ports:
       - "3000:3000"
     depends_on:
@@ -18,6 +20,8 @@ services:
       dockerfile: Dockerfile
     ports:
       - "8001:8001"
+    environment:
+      - BACKEND_URL=http://backend:8000
     healthcheck:
       test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8001/health')"]
       interval: 10s
