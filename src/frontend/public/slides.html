@@ -204,7 +204,64 @@
         </div>
       </section>
 
-      <!-- 4: Intelligent Processing (20%) -->
+      <!-- 3c: Database Schema -->
+      <section>
+        <span class="score-badge">Architecture</span>
+        <h2>Database Schema</h2>
+        <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 12px; margin-top: 14px; font-size: 0.45em; text-align: left;">
+          <div style="background: rgba(34,211,238,0.08); border: 1px solid rgba(34,211,238,0.25); border-radius: 10px; padding: 12px;">
+            <div style="color: var(--s-cyan); font-weight: 700; margin-bottom: 6px;">resource_logs</div>
+            <div style="color: rgba(255,255,255,0.6); line-height: 1.6;">
+              timestamp, sector_id, resource_type,<br>
+              stock_level, usage_rate_hourly,<br>
+              snap_event_detected<br>
+              <span style="color: rgba(255,255,255,0.35);">idx: (sector, resource), (timestamp)</span>
+            </div>
+          </div>
+          <div style="background: rgba(167,139,250,0.08); border: 1px solid rgba(167,139,250,0.25); border-radius: 10px; padding: 12px;">
+            <div style="color: var(--s-purple); font-weight: 700; margin-bottom: 6px;">intel_reports</div>
+            <div style="color: rgba(255,255,255,0.6); line-height: 1.6;">
+              raw_text, redacted_text, metadata (JSON),<br>
+              priority, status, extracted_entities (JSON)<br>
+              <span style="color: rgba(255,255,255,0.35);">PII stored server-side only, never in API responses</span>
+            </div>
+          </div>
+          <div style="background: rgba(251,191,36,0.08); border: 1px solid rgba(251,191,36,0.25); border-radius: 10px; padding: 12px;">
+            <div style="color: var(--s-yellow); font-weight: 700; margin-bottom: 6px;">forecasts</div>
+            <div style="color: rgba(255,255,255,0.6); line-height: 1.6;">
+              sector_id, resource_type,<br>
+              hours_until_exhaustion, confidence,<br>
+              strategy_used, snap_detected<br>
+              <span style="color: rgba(255,255,255,0.35);">unique: (sector, resource, computed_at)</span>
+            </div>
+          </div>
+          <div style="background: rgba(52,211,153,0.08); border: 1px solid rgba(52,211,153,0.25); border-radius: 10px; padding: 12px;">
+            <div style="color: var(--s-green); font-weight: 700; margin-bottom: 6px;">redaction_log</div>
+            <div style="color: rgba(255,255,255,0.6); line-height: 1.6;">
+              report_id (FK &rarr; intel_reports),<br>
+              original_text_hash (SHA-256),<br>
+              patterns_matched (JSON)<br>
+              <span style="color: rgba(255,255,255,0.35);">Cryptographic audit trail for every redaction</span>
+            </div>
+          </div>
+          <div style="background: rgba(248,113,113,0.08); border: 1px solid rgba(248,113,113,0.25); border-radius: 10px; padding: 12px; grid-column: 1 / -1;">
+            <div style="color: var(--s-red); font-weight: 700; margin-bottom: 6px;">control_actions</div>
+            <div style="color: rgba(255,255,255,0.6); line-height: 1.6;">
+              champion_confidence, total_budget_used, allocations (JSON), rationale, sectors_adjusted
+              <span style="color: rgba(255,255,255,0.35);">&mdash; Full governor decision history</span>
+            </div>
+          </div>
+        </div>
+        <div class="tech-stack" style="margin-top: 12px;">
+          <span class="tech-tag">PostgreSQL 16</span>
+          <span class="tech-tag">ACID Transactions</span>
+          <span class="tech-tag">JSON/JSONB Columns</span>
+          <span class="tech-tag">Composite Indexes</span>
+          <span class="tech-tag">Alembic Migrations</span>
+        </div>
+      </section>
+
+      <!-- 4: Intelligent Processing -->
       <section>
         <span class="score-badge" style="border-color: var(--s-purple); color: var(--s-purple); background: rgba(167,139,250,0.15);">Intelligent Processing</span>
         <h2>JARVIS AI Suite</h2>
