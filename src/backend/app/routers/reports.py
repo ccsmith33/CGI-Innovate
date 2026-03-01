@@ -7,6 +7,8 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.database import get_db, get_session_factory
 from app.models.intel_report import IntelReport
 from app.models.redaction_log import RedactionLog
+from pydantic import BaseModel
+
 from app.schemas.report import (
     ReportListResponse,
     ReportResponse,
@@ -14,6 +16,16 @@ from app.schemas.report import (
     ReportSubmitResponse,
 )
 from app.services.shield import redact_pii
+
+
+class RedactionPreviewRequest(BaseModel):
+    text: str
+
+
+class RedactionPreviewResponse(BaseModel):
+    original: str
+    redacted: str
+    patterns_matched: list[str]
 
 router = APIRouter(prefix="/reports", tags=["reports"])
 
@@ -84,6 +96,23 @@ async def submit_report(
     )
 
 
+@router.post("/process-pending", status_code=202)
+async def process_pending_reports(
+    background_tasks: BackgroundTasks,
+    db: AsyncSession = Depends(get_db),
+):
+    result = await db.execute(
+        select(IntelReport).where(IntelReport.status == "pending")
+    )
+    reports = result.scalars().all()
+    count = len(reports)
+    for report in reports:
+        background_tasks.add_task(
+            process_report_background, report.report_id, report.redacted_text
+        )
+    return {"queued": count, "message": f"Queued {count} pending reports for LLM processing."}
+
+
 @router.get("", response_model=ReportListResponse)
 async def list_reports(
     status: str | None = None,
@@ -126,3 +155,13 @@ async def get_report(report_id: str, db: AsyncSession = Depends(get_db)):
     if not report:
         raise HTTPException(status_code=404, detail="Report not found")
     return ReportResponse.model_validate(report)
+
+
+@router.post("/preview-redaction", response_model=RedactionPreviewResponse)
+async def preview_redaction(body: RedactionPreviewRequest):
+    result = redact_pii(body.text)
+    return RedactionPreviewResponse(
+        original=body.text,
+        redacted=result.redacted_text,
+        patterns_matched=result.patterns_matched,
+    )

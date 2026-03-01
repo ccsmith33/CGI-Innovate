@@ -6,6 +6,32 @@ from sklearn.linear_model import LinearRegression
 from app.services.strategies.base import ForecastingStrategy, ForecastResult
 
 
+def _iqr_filter(
+    stock_levels: list[float], timestamps: list[datetime]
+) -> tuple[list[float], list[datetime]]:
+    """Remove IQR-based outliers. Skip if fewer than 10 points would remain."""
+    arr = np.array(stock_levels)
+    q1 = float(np.quantile(arr, 0.25))
+    q3 = float(np.quantile(arr, 0.75))
+    iqr = q3 - q1
+
+    lower = q1 - 1.5 * iqr
+    upper = q3 + 1.5 * iqr
+
+    filtered = [
+        (s, t)
+        for s, t in zip(stock_levels, timestamps)
+        if lower <= s <= upper
+    ]
+
+    if len(filtered) < 10:
+        return stock_levels, timestamps
+
+    filtered_stocks = [s for s, _ in filtered]
+    filtered_ts = [t for _, t in filtered]
+    return filtered_stocks, filtered_ts
+
+
 class LinearRegressionStrategy(ForecastingStrategy):
     def __init__(self):
         self._slope: float = 0.0
@@ -27,6 +53,9 @@ class LinearRegressionStrategy(ForecastingStrategy):
             self._t0 = timestamps[0] if timestamps else None
             self._last_timestamp = timestamps[-1] if timestamps else None
             return
+
+        # Apply IQR outlier filtering
+        stock_levels, timestamps = _iqr_filter(stock_levels, timestamps)
 
         self._t0 = timestamps[0]
         self._last_timestamp = timestamps[-1]

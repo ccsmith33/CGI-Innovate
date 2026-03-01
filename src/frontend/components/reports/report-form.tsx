@@ -1,6 +1,6 @@
 'use client'
 
-import { useState } from 'react'
+import { useState, useEffect, useRef, useCallback } from 'react'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
@@ -13,8 +13,26 @@ import {
   SelectValue,
 } from '@/components/ui/select'
 import { StatusBadge } from './status-badge'
-import { submitReport } from '@/lib/api'
-import { Loader2, Send } from 'lucide-react'
+import { submitReport, fetchRedactionPreview } from '@/lib/api'
+import type { RedactionPreview } from '@/lib/types'
+import { Loader2, Send, ShieldCheck } from 'lucide-react'
+
+function RedactedPreviewText({ text }: { text: string }) {
+  const parts = text.split(/(\[REDACTED\])/g)
+  return (
+    <pre className="text-xs text-gray-300 bg-gray-950 p-3 rounded-md overflow-x-auto font-mono whitespace-pre-wrap break-words min-h-[120px]">
+      {parts.map((part, i) =>
+        part === '[REDACTED]' ? (
+          <span key={i} className="bg-red-900/40 text-red-400 px-1 rounded font-bold">
+            [REDACTED]
+          </span>
+        ) : (
+          <span key={i}>{part}</span>
+        )
+      )}
+    </pre>
+  )
+}
 
 export function ReportForm() {
   const [rawText, setRawText] = useState('')
@@ -24,6 +42,39 @@ export function ReportForm() {
   const [loading, setLoading] = useState(false)
   const [submittedId, setSubmittedId] = useState<string | null>(null)
   const [error, setError] = useState<string | null>(null)
+
+  const [preview, setPreview] = useState<RedactionPreview | null>(null)
+  const [previewLoading, setPreviewLoading] = useState(false)
+  const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+
+  const fetchPreview = useCallback((text: string) => {
+    if (debounceRef.current) clearTimeout(debounceRef.current)
+
+    if (!text.trim()) {
+      setPreview(null)
+      setPreviewLoading(false)
+      return
+    }
+
+    setPreviewLoading(true)
+    debounceRef.current = setTimeout(async () => {
+      try {
+        const result = await fetchRedactionPreview(text)
+        setPreview(result)
+      } catch {
+        // Preview is best-effort; don't block the form
+      } finally {
+        setPreviewLoading(false)
+      }
+    }, 300)
+  }, [])
+
+  useEffect(() => {
+    fetchPreview(rawText)
+    return () => {
+      if (debounceRef.current) clearTimeout(debounceRef.current)
+    }
+  }, [rawText, fetchPreview])
 
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault()
@@ -45,6 +96,7 @@ export function ReportForm() {
       setHeroAlias('')
       setSecureContact('')
       setPriority('Routine')
+      setPreview(null)
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Failed to submit report')
     } finally {
@@ -59,17 +111,45 @@ export function ReportForm() {
       </CardHeader>
       <CardContent>
         <form onSubmit={handleSubmit} className="space-y-4">
-          <div>
-            <label className="block text-sm font-medium text-gray-300 mb-1">
-              Raw Report Text
-            </label>
-            <Textarea
-              value={rawText}
-              onChange={(e) => setRawText(e.target.value)}
-              placeholder="Describe the situation..."
-              className="bg-gray-800 border-gray-700 text-gray-100 min-h-[120px] placeholder:text-gray-500"
-              required
-            />
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+            {/* Left pane: raw text input */}
+            <div>
+              <label className="block text-sm font-medium text-gray-300 mb-1">
+                Raw Report Text
+              </label>
+              <Textarea
+                value={rawText}
+                onChange={(e) => setRawText(e.target.value)}
+                placeholder="Describe the situation..."
+                className="bg-gray-800 border-gray-700 text-gray-100 min-h-[120px] placeholder:text-gray-500"
+                required
+                data-testid="report-textarea"
+              />
+            </div>
+
+            {/* Right pane: redacted preview */}
+            <div>
+              <label className="block text-sm font-medium text-gray-300 mb-1 flex items-center gap-1">
+                <ShieldCheck className="w-3 h-3 text-green-400" />
+                Redaction Preview
+              </label>
+              {previewLoading ? (
+                <div className="flex items-center justify-center min-h-[120px] bg-gray-950 rounded-md border border-gray-700">
+                  <Loader2 className="w-5 h-5 text-blue-400 animate-spin" />
+                </div>
+              ) : preview ? (
+                <div>
+                  <RedactedPreviewText text={preview.redacted} />
+                  <p className="text-xs text-gray-500 mt-1" data-testid="redaction-count">
+                    {(preview.patterns_matched ?? []).length} item{(preview.patterns_matched ?? []).length !== 1 ? 's' : ''} redacted
+                  </p>
+                </div>
+              ) : (
+                <div className="flex items-center justify-center min-h-[120px] bg-gray-950 rounded-md border border-gray-700 text-gray-600 text-sm">
+                  Start typing to see redaction preview
+                </div>
+              )}
+            </div>
           </div>
 
           <div>

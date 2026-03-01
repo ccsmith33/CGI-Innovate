@@ -23,6 +23,39 @@ Return a JSON object with exactly these fields:
 - summary: A one-sentence summary of the intelligence
 - confidence: A float between 0 and 1 indicating your confidence in the extraction"""
 
+INTEL_JSON_SCHEMA = {
+    "name": "intel_extraction",
+    "strict": True,
+    "schema": {
+        "type": "object",
+        "properties": {
+            "sector_id": {
+                "type": ["string", "null"],
+                "description": "The sector name mentioned",
+            },
+            "resource_type": {
+                "type": ["string", "null"],
+                "description": "The resource type mentioned",
+            },
+            "severity": {
+                "type": "string",
+                "enum": ["critical", "high", "medium", "low"],
+                "description": "Severity level",
+            },
+            "summary": {
+                "type": "string",
+                "description": "One-sentence summary of the intelligence",
+            },
+            "confidence": {
+                "type": "number",
+                "description": "Confidence score between 0 and 1",
+            },
+        },
+        "required": ["sector_id", "resource_type", "severity", "summary", "confidence"],
+        "additionalProperties": False,
+    },
+}
+
 
 async def extract_intel(redacted_text: str) -> dict:
     if not settings.OPENAI_API_KEY:
@@ -31,8 +64,11 @@ async def extract_intel(redacted_text: str) -> dict:
     client = AsyncOpenAI(api_key=settings.OPENAI_API_KEY)
     try:
         response = await client.chat.completions.create(
-            model="gpt-5.2",
-            response_format={"type": "json_object"},
+            model="gpt-4o-mini",
+            response_format={
+                "type": "json_schema",
+                "json_schema": INTEL_JSON_SCHEMA,
+            },
             messages=[
                 {"role": "system", "content": SYSTEM_PROMPT},
                 {"role": "user", "content": redacted_text},

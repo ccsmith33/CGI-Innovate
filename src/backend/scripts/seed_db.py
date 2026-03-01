@@ -24,8 +24,8 @@ def get_sync_database_url() -> str:
         "DATABASE_URL",
         "postgresql+asyncpg://sentinel:change-me-in-production@localhost:5432/sentinel",
     )
-    # Convert async URL to sync
-    return url.replace("+asyncpg", "").replace("+aiosqlite", "")
+    # Convert async URL to sync psycopg2 driver
+    return url.replace("postgresql+asyncpg://", "postgresql://").replace("+aiosqlite", "")
 
 
 def seed_resources(session: Session, data_dir: Path) -> int:
@@ -107,11 +107,11 @@ def seed_intel_reports(session: Session, data_dir: Path) -> int:
 
 
 def main():
-    data_dir = Path(__file__).resolve().parent.parent.parent.parent / "Prompt-Resources" / "challenger_package" / "challenger_package"
+    data_dir = Path("/app/Prompt-Resources/challenger_package/challenger_package")
 
     if not data_dir.exists():
         # Try alternate path without nested challenger_package
-        data_dir = Path(__file__).resolve().parent.parent.parent.parent / "Prompt-Resources"
+        data_dir = Path("/app/Prompt-Resources")
 
     print(f"Data directory: {data_dir}")
 

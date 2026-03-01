@@ -2,11 +2,14 @@
 
 import Link from 'next/link'
 import { usePathname } from 'next/navigation'
-import { BarChart3, Radio, Shield } from 'lucide-react'
+import { BarChart3, Radio, Shield, ShieldCheck, FlaskConical, Globe } from 'lucide-react'
 
 const nav = [
   { href: '/dashboard', label: 'Analytics', icon: BarChart3 },
+  { href: '/map', label: 'Ops Map', icon: Globe },
+  { href: '/simulation', label: 'Simulation', icon: FlaskConical },
   { href: '/reports', label: 'Field Intel', icon: Radio },
+  { href: '/security', label: 'Security', icon: ShieldCheck },
 ]
 
 export function Sidebar() {

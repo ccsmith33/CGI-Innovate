@@ -1,16 +1,28 @@
-version: "3.9"
-
 services:
   frontend:
     build:
       context: ./src/frontend
       dockerfile: Dockerfile
+      args:
+        NEXT_PUBLIC_API_URL: ${NEXT_PUBLIC_API_URL:-http://localhost:8000}
     ports:
       - "3000:3000"
-    environment:
-      - NEXT_PUBLIC_API_URL=http://localhost:8000
     depends_on:
       - backend
+    networks:
+      - sentinel-net
+
+  feed:
+    build:
+      context: ./src/feed-service
+      dockerfile: Dockerfile
+    ports:
+      - "8001:8001"
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8001/health')"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
     networks:
       - sentinel-net
 
@@ -24,9 +36,14 @@ services:
       - .env
     environment:
       - DATABASE_URL=postgresql+asyncpg://${POSTGRES_USER:-sentinel}:${POSTGRES_PASSWORD:-change-me-in-production}@db:5432/${POSTGRES_DB:-sentinel}
+      - FEED_SERVICE_URL=http://feed:8001
+    volumes:
+      - ./Prompt-Resources:/app/Prompt-Resources:ro
     depends_on:
       db:
         condition: service_healthy
+      feed:
+        condition: service_started
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
       interval: 30s

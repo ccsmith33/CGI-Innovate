@@ -2,6 +2,7 @@ import type { Metadata } from 'next'
 import { Geist, Geist_Mono } from 'next/font/google'
 import './globals.css'
 import { Sidebar } from '@/components/layout/sidebar'
+import { ChatWidget } from '@/components/jarvis/chat-widget'
 
 const geistSans = Geist({
   variable: '--font-geist-sans',
@@ -32,6 +33,7 @@ export default function RootLayout({
           <Sidebar />
           <main className="flex-1 overflow-auto">{children}</main>
         </div>
+        <ChatWidget />
       </body>
     </html>
   )

@@ -1,15 +1,19 @@
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.database import get_db
 from app.models.forecast import Forecast
+from app.models.resource_log import ResourceLog
 from app.schemas.forecast import (
     ForecastListResponse,
     ForecastRefreshResponse,
     ForecastResponse,
 )
 from app.services.jarvis_forecast import DEFAULT_STRATEGY, ForecastService
+from app.services.strategies.exponential_decay import ExponentialDecayStrategy
+from app.services.strategies.linear_regression import LinearRegressionStrategy
+from app.services.strategies.polynomial_regression import PolynomialRegressionStrategy
 
 router = APIRouter(prefix="/forecasts", tags=["forecasts"])
 
@@ -68,3 +72,49 @@ async def refresh_forecasts(db: AsyncSession = Depends(get_db)):
     return ForecastRefreshResponse(
         message="Forecast refresh initiated", strategy=DEFAULT_STRATEGY
     )
+
+
+@router.get("/compare")
+async def compare_forecasts(
+    sector_id: str = Query(...),
+    resource_type: str = Query(...),
+    db: AsyncSession = Depends(get_db),
+):
+    result = await db.execute(
+        select(ResourceLog)
+        .where(ResourceLog.sector_id == sector_id)
+        .where(ResourceLog.resource_type == resource_type)
+        .order_by(ResourceLog.timestamp)
+    )
+    rows = result.scalars().all()
+
+    if not rows:
+        raise HTTPException(status_code=404, detail="No resource logs found")
+
+    timestamps = [r.timestamp for r in rows]
+    stock_levels = [r.stock_level for r in rows]
+    snap_flags = [r.snap_event_detected for r in rows]
+
+    strategies = {
+        "linear_regression": LinearRegressionStrategy(),
+        "polynomial_regression": PolynomialRegressionStrategy(),
+        "exponential_decay": ExponentialDecayStrategy(),
+    }
+
+    results = {}
+    for name, strategy in strategies.items():
+        strategy.fit(timestamps, stock_levels, snap_flags)
+        forecast = strategy.predict_exhaustion_date()
+        results[name] = {
+            "predicted_exhaustion_date": (
+                forecast.predicted_exhaustion_date.isoformat()
+                if forecast.predicted_exhaustion_date
+                else None
+            ),
+            "hours_until_exhaustion": forecast.hours_until_exhaustion,
+            "confidence": forecast.confidence,
+            "strategy_name": forecast.strategy_name,
+            "snap_detected": forecast.snap_detected,
+        }
+
+    return {"sector_id": sector_id, "resource_type": resource_type, "forecasts": results}

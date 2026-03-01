@@ -1,5 +1,18 @@
 # Code Review: Project Sentinel
 
+---
+
+## Sprint 5 Review: ML Feedback Control Loop — APPROVED
+
+**Date:** 2026-02-28
+**Stories reviewed:** Feed Service Overhaul, Governor Service, Dashboard Command Center
+**Result:** APPROVED — 29/29 criteria passed, 0 blocking issues
+
+### Advisory Finding (non-blocking)
+- **A-1** `src/feed-service/app/main.py:75` — `POST /control/production` returns a raw tuple `(dict, 400)` for invalid sector/resource input instead of raising `HTTPException`. FastAPI serializes this as a 200 response with the tuple as the body. Happy path unaffected. **Fix in next story.**
+
+---
+
 ## Verdict: APPROVED (with advisory issues)
 
 ## Summary
